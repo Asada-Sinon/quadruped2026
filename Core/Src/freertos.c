@@ -160,7 +160,7 @@ void motor(void const * argument)
     //   Target_Angle[3][1] = test_angle[1];
     //   Target_Angle[3][2] = test_angle[2];
     // }
-    Gait_SetLegFootTargetMm(3, test_angle[0], test_angle[1], test_angle[2]);
+    Gait_SetLegFootTargetM(3, test_angle[0], test_angle[1], test_angle[2]);
     App_Robot_Loop1ms();
     osDelay(3);
   }

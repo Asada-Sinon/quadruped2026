@@ -122,12 +122,11 @@ void App_Robot_Init(void)
     //直接把腿和485端口绑定
     RobotMap_Init();
     // 这里是新加的
-    Gait_Init();
     /* 默认保持 IK 关闭，避免影响现有 test_angle 角度控制链路。 */
     /* 若要切换到足端坐标控制，请在上层调用：Gait_EnableIkControl(1); */
     //这个注释掉之后就是傻子位控，不带任何正逆运动学的，直接把目标角发给电机就行了。现在打开就是足端坐标控制，输入足端目标点，内部自动反解成关节角发给电机。
-    Gait_EnableIkControl(1);
     send_data_all(legs);
+    //这里直接初始化012，左前腿。
     cmd_single_test_init();
     VOFA_JF_DMA_Init(&hvofa, &huart6);
 }
@@ -284,7 +283,7 @@ float App_target_relative_to_absolute(float pos_rel,
      * abs_cmd = 当前绝对角 + dir * (目标相对角 - 当前相对角)
      * 这样可把“相对目标”准确映射回电机协议要的“绝对角”。
      */
-    return pos_abs + dir * delta_rel * APP_GEAR_RATIO;
+    return pos_abs + dir * delta_rel;
 }
 // 所有电机平滑计算
 void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],

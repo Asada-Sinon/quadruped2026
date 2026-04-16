@@ -175,43 +175,43 @@ void cmd_init(void)
 
 void cmd_single_test_init(void)
 {
-	// cmd[1].id = 2;
-	// cmd[1].mode = 1;
-	// cmd[1].T = 0.0f;
-	// cmd[1].W = 10.0f;
-	// cmd[1].Pos = 0.0f;
-	// cmd[1].K_P = 1.0f;
-	// cmd[1].K_W = 0.02f;
+	cmd[1].id = 2;
+	cmd[1].mode = 1;
+	cmd[1].T = 0.0f;
+	cmd[1].W = 0.0f;
+	cmd[1].Pos = 0.0f;
+	cmd[1].K_P = 0.4f;
+	cmd[1].K_W = 0.02f;
 
-	// cmd[2].id = 3;
-	// cmd[2].mode = 1;
-	// cmd[2].T = 0.0f;
-	// cmd[2].W = 10.0f;
-	// cmd[2].Pos = 0.0f;
-	// cmd[2].K_P = 1.0f;
-	// cmd[2].K_W = 0.02f;
+	cmd[2].id = 3;
+	cmd[2].mode = 1;
+	cmd[2].T = 0.0f;
+	cmd[2].W = 0.0f;
+	cmd[2].Pos = 0.0f;
+	cmd[2].K_P = 0.4f;
+	cmd[2].K_W = 0.02f;
 
-	// cmd[0].id = 1;
-	// cmd[0].mode = 1;
-	// cmd[0].T = 0.0f;
-	// cmd[0].W = 10.0f;
-	// cmd[0].Pos = 0.0f;
-	// cmd[0].K_P = 1.0f;
-	// cmd[0].K_W = 0.02f;
-	// modify_data(&cmd[0]);
-	// modify_data(&cmd[1]);
-	// modify_data(&cmd[2]);
-	for (int i = 0; i < 12; i++)
-	{
-		cmd[i].id = i + 1;
-		cmd[i].mode = 1;
-		cmd[i].T = 0.0f;
-		cmd[i].W = 0.0f;
-		cmd[i].Pos = 0.0f;
-		cmd[i].K_P = 0.5f;
-		cmd[i].K_W = 0.02f;
-		modify_data(&cmd[i]);
-	}
+	cmd[0].id = 1;
+	cmd[0].mode = 1;
+	cmd[0].T = 0.0f;
+	cmd[0].W = 0.0f;
+	cmd[0].Pos = 0.0f;
+	cmd[0].K_P = 0.4f;
+	cmd[0].K_W = 0.02f;
+	modify_data(&cmd[0]);
+	modify_data(&cmd[1]);
+	modify_data(&cmd[2]);
+	// for (int i = 0; i < 12; i++)
+	// {
+	// 	cmd[i].id = i + 1;
+	// 	cmd[i].mode = 1;
+	// 	cmd[i].T = 0.0f;
+	// 	cmd[i].W = 0.0f;
+	// 	cmd[i].Pos = 0.0f;
+	// 	cmd[i].K_P = 0.5f;
+	// 	cmd[i].K_W = 0.02f;
+	// 	modify_data(&cmd[i]);
+	// }
 }
 
 void set_cmd_pos_by_index(uint8_t cmd_idx, float pos)

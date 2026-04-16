@@ -25,36 +25,17 @@ typedef struct
 
 typedef struct
 {
-    LegSizeVectorMm imu_center_to_motor1_axis;                    // O -> A：IMU 中心到单腿电机1轴心
-    LegSizeVectorMm motor1_axis_to_motor2_axis;                   // A -> B：单腿电机1轴心到单腿电机2轴心
-    LegSizeVectorMm motor2_axis_to_knee_joint_axis;               // B -> C：单腿电机2轴心到膝关节轴心
-    LegSizeVectorMm knee_joint_axis_to_foot_tip;                  // C -> D：膝关节轴心到足端点
-    LegSizeVectorMm motor3_axis_to_knee_joint_axis;               // E -> C：单腿电机3轴心到膝关节轴心
-    LegSizeVectorMm motor3_axis_to_motor3_side_link_pin;          // E -> F：单腿电机3轴心到电机3侧连杆销轴
-    LegSizeVectorMm motor3_side_link_pin_to_shank_side_link_pin;  // F -> G：电机3侧销轴到小腿侧销轴的三维分量
-    float link_pin_center_distance_mm;                            // F -> G：连杆两端销轴中心距（标量）
-    LegSizeVectorMm knee_joint_axis_to_shank_side_link_pin;       // C -> G：膝关节轴心到小腿侧连杆销轴
-
-    /*
-     * 下面 4 个标量是“简化 3R 运动学”直接使用的参数：
-     * - hip_offset_x_mm / hip_offset_y_mm：A->B 在 X/Y 方向的偏置；
-     * - thigh_length_mm：使用 B->C 在 X-Z 平面的投影长度；
-     * - shank_length_mm：使用 C->D 在 X-Z 平面的投影长度。
-     *
-     * 说明：这组参数用于先落地简化模型，不替代闭链精确几何。
-     */
-    float hip_offset_x_mm;
-    float hip_offset_y_mm;
-    float thigh_length_mm;
-    float shank_length_mm;
+    float hip_length;   // 髋关节偏置长度，单位 m
+    float thigh_length; // 大腿长度，单位 m
+    float calf_length;  // 小腿长度，单位 m
 } LegRealSize;
 
 
 extern Leg legs[ROBOT_LEG_NUM];
-extern LegRealSize leg_real_size; // 单腿真实几何尺寸参数（按实测值保存）
+extern LegRealSize leg_real_size; // 单腿真实几何尺寸参数（按实测值保存，单位 m）
 
 // 用实测值初始化 leg_real_size。
-// 单位全部使用 mm，便于和机械图纸直接对照。
+// 单位全部使用 m。
 void RobotMap_InitLegRealSize(void);
 void RobotMap_Init(void);
 #endif
