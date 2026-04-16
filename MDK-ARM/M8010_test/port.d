@@ -1,0 +1,12 @@
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F/port.c
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h
+m8010_test\port.o: E:\Keil\ARM\ARMCC\Bin\..\include\stddef.h
+m8010_test\port.o: E:\Keil\ARM\ARMCC\Bin\..\include\stdint.h
+m8010_test\port.o: ../Core/Inc/FreeRTOSConfig.h
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/portable.h
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/deprecated_definitions.h
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F/portmacro.h
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/task.h
+m8010_test\port.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/list.h
