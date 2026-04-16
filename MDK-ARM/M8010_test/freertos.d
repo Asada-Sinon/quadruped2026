@@ -56,3 +56,4 @@ m8010_test\freertos.o: ../Core/Inc/usart.h
 m8010_test\freertos.o: ../user/Inc/M8010.h
 m8010_test\freertos.o: E:\Keil\ARM\ARMCC\Bin\..\include\stdlib.h
 m8010_test\freertos.o: ../user/Inc/vofa.h
+m8010_test\freertos.o: ../user/Inc/gait.h

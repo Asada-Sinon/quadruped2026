@@ -1,4 +1,5 @@
 #include "robot_map.h"
+#include <math.h>
 
 /*
  * 串口映射也只在这里改：
@@ -18,6 +19,15 @@ int sign[12] = {1,1,1,-1,-1,-1,-1,1,1,1,-1,-1};
  */
 void RobotMap_InitLegRealSize(void)
 {
+    /*
+     * 这几个局部常量只用于初始化阶段做长度投影计算，
+     * 保证“向量参数”和“简化 3R 标量参数”来自同一组实测数据。
+     */
+    const float bc_x = 174.48f;
+    const float bc_z = 116.95f;
+    const float cd_x = 125.22f;
+    const float cd_z = 205.53f;
+
     leg_real_size.imu_center_to_motor1_axis.x_mm = 166.3f; // O -> A：IMU 中心到单腿电机1轴心的 X 分量
     leg_real_size.imu_center_to_motor1_axis.y_mm = 90.0f;  // O -> A：IMU 中心到单腿电机1轴心的 Y 分量
     leg_real_size.imu_center_to_motor1_axis.z_mm = 77.5f;  // O -> A：IMU 中心到单腿电机1轴心的 Z 分量
@@ -51,6 +61,16 @@ void RobotMap_InitLegRealSize(void)
     leg_real_size.knee_joint_axis_to_shank_side_link_pin.x_mm = 16.54f; // C -> G：膝关节轴心到小腿侧连杆销轴的 X 分量
     leg_real_size.knee_joint_axis_to_shank_side_link_pin.y_mm = 0.0f;   // C -> G：膝关节轴心到小腿侧连杆销轴的 Y 分量
     leg_real_size.knee_joint_axis_to_shank_side_link_pin.z_mm = 15.25f; // C -> G：膝关节轴心到小腿侧连杆销轴的 Z 分量
+
+    /*
+     * 简化 3R 模型参数写入（单位 mm）：
+     * hip_offset_x/y 直接使用 A->B 的 X/Y 偏置；
+     * thigh/shank 使用 X-Z 平面投影长度，便于 2R 平面解算。
+     */
+    leg_real_size.hip_offset_x_mm = leg_real_size.motor1_axis_to_motor2_axis.x_mm;
+    leg_real_size.hip_offset_y_mm = leg_real_size.motor1_axis_to_motor2_axis.y_mm;
+    leg_real_size.thigh_length_mm = sqrtf((bc_x * bc_x) + (bc_z * bc_z));
+    leg_real_size.shank_length_mm = sqrtf((cd_x * cd_x) + (cd_z * cd_z));
 }
 
 void RobotMap_Init(void)

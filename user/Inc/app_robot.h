@@ -40,6 +40,9 @@ void App_vofa_Send(void);
  */
 extern float Target_Angle[ROBOT_LEG_NUM][MOTORS_PER_LEG];
 
+/* 当前关节相对角反馈缓存（来自各电机 motor_r.PosRel），单位 rad。 */
+extern float current_angle_rel[ROBOT_LEG_NUM][MOTORS_PER_LEG];
+
 /*
  * 关节角平滑插值：
  * - target_angle: 上层解算出的目标角(rad)

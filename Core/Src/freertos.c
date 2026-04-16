@@ -29,6 +29,7 @@
 #include "M8010.h"
 #include "usart.h"
 #include "vofa.h"
+#include "gait.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,9 +57,9 @@ osThreadId myTask03Handle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-int test = 0;
-//float test_angle[3] = {0.53, -11.68, 5.88};
-float test_angle[3] = {-5.15, -0.61, 5.47};
+//int test = 0;
+float test_angle[3] = {0, 0, 0};
+//float test_angle[3] = {-5.15, -0.61, 5.47};
 /* USER CODE END FunctionPrototypes */
 
 void motor(void const * argument);
@@ -141,24 +142,25 @@ void motor(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    if(test == 1)
-    {
-      Target_Angle[0][0] = test_angle[0];
-      Target_Angle[0][1] = test_angle[1];
-      Target_Angle[0][2] = test_angle[2];
+    // if(test == 1)
+    // {
+    //   Target_Angle[0][0] = test_angle[0];
+    //   Target_Angle[0][1] = test_angle[1];
+    //   Target_Angle[0][2] = test_angle[2];
 
-      Target_Angle[1][0] = test_angle[0];
-      Target_Angle[1][1] = test_angle[1];
-      Target_Angle[1][2] = test_angle[2];
+    //   Target_Angle[1][0] = test_angle[0];
+    //   Target_Angle[1][1] = test_angle[1];
+    //   Target_Angle[1][2] = test_angle[2];
 
-      Target_Angle[2][0] = test_angle[0];
-      Target_Angle[2][1] = test_angle[1];
-      Target_Angle[2][2] = test_angle[2];
+    //   Target_Angle[2][0] = test_angle[0];
+    //   Target_Angle[2][1] = test_angle[1];
+    //   Target_Angle[2][2] = test_angle[2];
 
-      Target_Angle[3][0] = test_angle[0];
-      Target_Angle[3][1] = test_angle[1];
-      Target_Angle[3][2] = test_angle[2];
-    }
+    //   Target_Angle[3][0] = test_angle[0];
+    //   Target_Angle[3][1] = test_angle[1];
+    //   Target_Angle[3][2] = test_angle[2];
+    // }
+    Gait_SetLegFootTargetMm(3, test_angle[0], test_angle[1], test_angle[2]);
     App_Robot_Loop1ms();
     osDelay(3);
   }

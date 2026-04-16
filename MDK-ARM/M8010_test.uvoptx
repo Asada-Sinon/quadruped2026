@@ -178,12 +178,27 @@
         <Ww>
           <count>4</count>
           <WinNumber>1</WinNumber>
-          <ItemText>test,0x0A</ItemText>
+          <ItemText>test_angle</ItemText>
         </Ww>
         <Ww>
           <count>5</count>
           <WinNumber>1</WinNumber>
-          <ItemText>test_angle,0x0A</ItemText>
+          <ItemText>Target_Angle</ItemText>
+        </Ww>
+        <Ww>
+          <count>6</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>current_angle_rel</ItemText>
+        </Ww>
+        <Ww>
+          <count>7</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>g_foot_target_mm</ItemText>
+        </Ww>
+        <Ww>
+          <count>8</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>g_ik_debug</ItemText>
         </Ww>
       </WatchWindow1>
       <Tracepoint>

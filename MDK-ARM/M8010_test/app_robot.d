@@ -55,4 +55,5 @@ m8010_test\app_robot.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/timer
 m8010_test\app_robot.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h
 m8010_test\app_robot.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/semphr.h
 m8010_test\app_robot.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/event_groups.h
+m8010_test\app_robot.o: ../user/Inc/gait.h
 m8010_test\app_robot.o: ../user/Inc/vofa.h

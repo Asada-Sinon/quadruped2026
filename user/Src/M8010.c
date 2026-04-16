@@ -206,9 +206,9 @@ void cmd_single_test_init(void)
 		cmd[i].id = i + 1;
 		cmd[i].mode = 1;
 		cmd[i].T = 0.0f;
-		cmd[i].W = 10.0f;
+		cmd[i].W = 0.0f;
 		cmd[i].Pos = 0.0f;
-		cmd[i].K_P = 1.0f;
+		cmd[i].K_P = 0.5f;
 		cmd[i].K_W = 0.02f;
 		modify_data(&cmd[i]);
 	}

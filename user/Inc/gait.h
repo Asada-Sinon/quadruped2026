@@ -1,286 +1,192 @@
-#ifndef GAIT_H
-#define GAIT_H
+#if !defined(__GAIT_H) /* 头文件防重复包含：如果 __GAIT_H 未定义，则继续编译本文件。 */
+#define __GAIT_H        /* 定义宏 __GAIT_H，防止同一个头文件被重复包含。 */
 
-#include <stdint.h>
-
-/*
- * gait 模块说明
- *
- * 本模块当前提供：
- * 1) 单腿正/逆运动学与雅可比矩阵
- * 2) 单腿简化动力学（逆动力学 / 正动力学）
- * 3) 足端轨迹生成（摆线 / 五次贝塞尔）
- * 4) 单步相位下的足端轨迹规划
- *
- * 当前模块采用的坐标约定：
- * - x：前方
- * - y：横向（左正右负，具体符号由上层统一）
- * - z：竖直方向
- *
- * 关节角约定：
- * - q[0]：髋外展/内收关节
- * - q[1]：髋俯仰（大腿前后摆）关节
- * - q[2]：膝俯仰关节
- *
- * 重要说明：
- * 1) 这个 gait 模块仍然是“单腿简化模型”，不是完整的四足整机模型。
- * 2) 你提供的 O->A、A->B、B->C、C->D、E->C、E->F、C->G、FG_LEN
- *    已经被写入参数结构体中，便于后续继续扩展。
- * 3) 但当前的正逆运动学仍然只直接使用 3 个等效长度：
- *    - hip_len   ：由 A->B 的长度近似得到
- *    - thigh_len ：由 B->C 的长度近似得到
- *    - shank_len ：由 C->D 的长度近似得到
- * 4) 也就是说，当前模型已经把实测三维尺寸“收缩”为一个 3 自由度等效腿模型。
- *    这适合先跑通位置控制、正逆运动学和基础轨迹规划，
- *    但还不能完整反映真实连杆和完整空间安装几何。
- *
- * 所有 uint8_t 接口的返回值约定：
- * - 1U：成功
- * - 0U：失败（空指针、目标不可达、矩阵奇异等）
- */
-
-#ifdef __cplusplus
-extern "C"
-{
-#endif
-
-/* 三维向量，既可用于位置，也可用于速度、加速度、力 */
-typedef struct
-{
-    float x;
-    float y;
-    float z;
-} GaitVec3;
-
-/* 单腿关节状态 */
-typedef struct
-{
-    /* 关节角，单位 rad */
-    float q[3];
-    /* 关节角速度，单位 rad/s */
-    float dq[3];
-    /* 关节角加速度，单位 rad/s^2 */
-    float ddq[3];
-} GaitJointState;
+#include "robot_map.h" /* 引入机器人基础映射定义（腿数量、关节数量、几何参数等）。 */
 
 /*
- * 单腿参数
- *
- * 单位约定：
- * - 长度：m
- * - 质量：kg
- * - 转动惯量：kg*m^2
- * - 阻尼：N*m*s/rad
+ * 结构体：GaitFootPosMm
+ * 用途：表示“单条腿足端点”的三维位置。
+ * 单位：全部使用 mm（毫米）。
+ * 坐标系：
+ * - 原点：该腿 motor1 轴心（髋关节局部坐标）。
+ * - +X：机器人前方。
+ * - +Y：机器人左侧。
+ * - +Z：机器人上方。
  */
 typedef struct
 {
-    /* ===== 当前简化模型直接使用的等效参数 ===== */
+	float x_mm; /* 足端在 X 方向的位置（毫米）。 */
+	float y_mm; /* 足端在 Y 方向的位置（毫米）。 */
+	float z_mm; /* 足端在 Z 方向的位置（毫米）。 */
+} GaitFootPosMm;
 
-    /* A->B 的等效长度：
-     * 从外展关节中心到俯仰链根部的等效偏置长度 */
-    float hip_len;
+/*
+ * 结构体：GaitIkDebug
+ * 用途：保存一次 IK 解算过程的全部中间变量，便于在线调试 NaN 来源。
+ */
+typedef struct
+{
+	uint32_t call_count;    /* IK 被调用次数（每次调用 +1）。 */
+	uint8_t leg_idx;        /* 本次解算腿编号。 */
+	uint8_t seed_valid;     /* 本次是否传入 seed。 */
 
-    /* B->C 的等效长度：
-     * 大腿等效长度 */
-    float thigh_len;
+	GaitFootPosMm foot_input_mm; /* 输入足端目标。 */
+	float seed_angle_rad[3];     /* 输入 seed（无 seed 时为 0）。 */
 
-    /* C->D 的等效长度：
-     * 小腿到足端接触点的等效长度 */
-    float shank_len;
+	float side;                /* 左右腿镜像符号。 */
+	float hip_offset_x;        /* 髋 X 偏置。 */
+	float hip_offset_y_signed; /* 带符号髋 Y 偏置。 */
+	float thigh_len;           /* 大腿长度。 */
+	float shank_len;           /* 小腿长度。 */
 
-    /* 各刚体质量：[髋侧、 大腿、 小腿] */
-    float mass[3];
+	float x;       /* 输入 x。 */
+	float y;       /* 输入 y。 */
+	float z;       /* 输入 z。 */
+	float x_plane; /* 去髋偏置后平面 x。 */
 
-    /* 围绕建模关节轴的转动惯量 */
-    float inertia[3];
+	float yz_sq;       /* y^2 + z^2。 */
+	float yz_delta_sq; /* y^2 + z^2 - hy^2。 */
+	float yz_delta_sq_clamped; /* yz_delta_sq 经过数值保护后的值。 */
+	float yz_rot_abs;  /* z_plane 的绝对值。 */
 
-    /* 各关节粘性阻尼 */
-    float damping[3];
+	float z_plane_candidate[2]; /* z_plane 两个分支。 */
+	float q1_candidate[2];      /* q1 两个分支。 */
+	float q1_ref;               /* q1 参考值。 */
+	uint8_t q1_pick_idx;        /* q1 选中分支。 */
 
-    /* 重力加速度大小，通常 9.81 */
-    float gravity;
+	float z_plane;  /* 选中后的 z_plane。 */
+	float r2;       /* 平面半径平方。 */
+	float cos_q3_raw; /* q3 余弦原始公式结果。 */
+	float cos_q3;   /* q3 余弦（兼容字段，保持与 raw 同步）。 */
+	float cos_q3_clamped; /* q3 余弦（钳位到 [-1,1]，实际用于 acosf）。 */
+	float q3_candidate[2]; /* q3 两个分支。 */
+	float q2_candidate[2]; /* q2 两个分支。 */
+	float q2_ref;          /* q2 参考值。 */
+	float q3_ref;          /* q3 参考值。 */
+	uint8_t q23_pick_idx;  /* q2/q3 选中分支。 */
+	uint8_t reachable_flag; /* 1=当前目标可达；0=不可达或数值异常。 */
+	uint8_t ik_fail_reason; /* 失败原因：0无失败，1空指针/越界，2YZ不可达，3cos_q3不可达，4数值异常。 */
 
-    /* ===== 原始实测参数（保留，便于后续继续扩展） ===== */
+	float out_angle_rad[3]; /* 最终输出角。 */
+} GaitIkDebug;
 
-    /* O->A：机身原点(如 IMU 中心) 到外展关节中心 A */
-    GaitVec3 raw_OA;
-
-    /* A->B：外展关节中心 A 到大腿前后摆关节中心 B */
-    GaitVec3 raw_AB;
-
-    /* B->C：大腿前后摆关节中心 B 到膝关节中心 C */
-    GaitVec3 raw_BC;
-
-    /* C->D：膝关节中心 C 到足端接触点 D */
-    GaitVec3 raw_CD;
-
-    /* E->C：膝驱动电机轴中心 E 到膝关节中心 C */
-    GaitVec3 raw_EC;
-
-    /* E->F：电机侧摇臂轴中心 E 到电机侧连杆销轴 F */
-    GaitVec3 raw_EF;
-
-    /* C->G：膝关节中心 C 到小腿侧连杆销轴 G */
-    GaitVec3 raw_CG;
-
-    /* F->G 连杆中心距长度 */
-    float raw_FG_len;
-} GaitLegParam;
-
-/* 膝关节分支选择：
- * 对同一个足端点，通常可能存在两支膝构型 */
+/*
+ * 枚举：GaitIkStatus
+ * 用途：描述逆运动学（IK）求解后的状态。
+ */
 typedef enum
 {
-    /* 膝关节正向弯折支 */
-    GAIT_KNEE_BEND_FORWARD = 1,
-    /* 膝关节反向弯折支 */
-    GAIT_KNEE_BEND_BACKWARD = -1
-} GaitKneeConfig;
+	GAIT_IK_OK = 0,                 /* IK 求解成功，out_angle_rad 中结果有效。 */
+	GAIT_IK_ERR_NULL = 1,           /* 空指针或索引越界等输入错误。 */
+	GAIT_IK_ERR_UNREACHABLE = 2,    /* 目标超出可达空间。 */
+	GAIT_IK_ERR_NUMERIC = 3,        /* 数值异常（非有限值）。 */
 
-/* 摆动相轨迹曲线类型 */
-typedef enum
-{
-    /* 摆线轨迹 */
-    GAIT_SWING_CYCLOID = 0,
-    /* 五次贝塞尔轨迹 */
-    GAIT_SWING_BEZIER = 1
-} GaitSwingCurve;
+	/* 兼容旧命名，避免影响既有调用代码。 */
+	GAIT_IK_INVALID_PARAM = GAIT_IK_ERR_NULL,
+	GAIT_IK_UNREACHABLE = GAIT_IK_ERR_UNREACHABLE
+} GaitIkStatus;
 
 /*
- * 单个完整步态周期的足端轨迹参数
- * phase in [0,1)：
- * - [0, swing_ratio) 为摆动相
- * - [swing_ratio, 1) 为支撑相
+ * 全局足端目标缓存（单位 mm）。
+ * 下标与腿编号一致：0 左前，1 右前，2 左后，3 右后。
+ * 坐标系：髋关节局部坐标（原点 motor1 轴心，+X前，+Y左，+Z上）。
  */
-typedef struct
-{
-    /* 抬脚点（摆动起点） */
-    GaitVec3 lift_off_pos;
-    /* 落脚点（摆动终点） */
-    GaitVec3 touch_down_pos;
-    /* 摆动相额外抬脚高度 */
-    float step_height;
-    /* 整个周期中摆动相占比，例如 0.4 */
-    float swing_ratio;
-    /* 一个完整周期的总时间，单位 s */
-    float cycle_time;
-    /* 摆动相使用哪种曲线 */
-    GaitSwingCurve swing_curve;
-} GaitTrajectoryParam;
+extern GaitFootPosMm g_foot_target_mm[ROBOT_LEG_NUM];
+
+/* 全局 IK 调试缓存：保存最近一次 IK 调用的完整中间变量。 */
+extern GaitIkDebug g_ik_debug;
 
 /*
- * 使用你提供的最新实测数据填充单腿参数。
- *
- * 注意：
- * 1) 当前先不管正负号，直接按“量值大小”写入。
- * 2) 该接口会同时填 raw_* 原始实测参数，
- *    并自动计算 hip_len / thigh_len / shank_len 三个等效长度。
+ * 函数：Gait_Init
+ * 作用：初始化 gait 模块内部状态。
+ * 具体做的事：
+ * 1) 清空足端目标缓存；
+ * 2) 清空上次 IK 解缓存；
+ * 3) 关闭 IK 开关；
+ * 4) 写入一组安全的默认足端目标（便于后续调试）。
  */
-void gait_leg_param_default(GaitLegParam *param);
-
-/* 浮点数限幅 */
-float gait_clampf(float v, float lo, float hi);
+void Gait_Init(void);
 
 /*
- * 将任意相位包裹到 [0,1) 区间。
- * 例如：
- * -0.2 -> 0.8
- *  1.35 -> 0.35
+ * 函数：Gait_EnableIkControl
+ * 作用：打开/关闭“足端目标 -> 关节角”的自动 IK 更新。
+ * 参数：
+ * - enable：
+ *   - 0 表示关闭 IK（沿用外部直接给 Target_Angle 的模式）；
+ *   - 非 0 表示开启 IK（由足端目标反解关节角）。
  */
-float gait_wrap_phase(float phase01);
+void Gait_EnableIkControl(uint8_t enable);
 
 /*
- * 单腿正运动学：q -> 足端位置
- *
- * 输入：
- * - param：单腿参数
- * - q：关节角 [q0, q1, q2]
- *
- * 输出：
- * - foot_pos：计算得到的足端位置（腿局部坐标系/本模块局部坐标系）
+ * 函数：Gait_IsIkControlEnabled
+ * 作用：读取 IK 控制开关状态。
+ * 返回值：
+ * - 1：IK 开启；
+ * - 0：IK 关闭。
  */
-uint8_t gait_forward_kinematics(const GaitLegParam *param, const float q[3], GaitVec3 *foot_pos);
+uint8_t Gait_IsIkControlEnabled(void);
 
 /*
- * 单腿逆运动学：足端位置 -> 关节角
- *
- * 输入：
- * - foot_pos：目标足端位置
- * - knee_cfg：膝关节解分支
- *
- * 输出：
- * - q_out：求解得到的关节角
+ * 函数：Gait_SetLegFootTargetMm
+ * 作用：设置某一条腿的足端目标点（单位 mm）。
+ * 参数：
+ * - leg_idx：腿编号（0~ROBOT_LEG_NUM-1）。
+ * - x_mm：目标点 X 坐标（毫米）。
+ * - y_mm：目标点 Y 坐标（毫米）。
+ * - z_mm：目标点 Z 坐标（毫米）。
+ * 返回值：
+ * - 0：设置成功；
+ * - 1：设置失败（腿编号越界）。
  */
-uint8_t gait_inverse_kinematics(const GaitLegParam *param, const GaitVec3 *foot_pos, GaitKneeConfig knee_cfg, float q_out[3]);
+uint8_t Gait_SetLegFootTargetMm(uint8_t leg_idx, float x_mm, float y_mm, float z_mm);
+
 
 /*
- * 雅可比矩阵：
- * v_foot = J * dq
+ * 函数：Gait_LegIK
+ * 作用：单腿逆运动学，把“足端目标位置”转换成“三关节角”。
+ * 参数：
+ * - leg_idx：腿编号（0~ROBOT_LEG_NUM-1）。
+ * - foot_pos_mm：输入足端目标点（mm，髋关节局部坐标系）。
+ * - seed_angle_rad：可选的参考关节角（可传 NULL），
+ *   用于在双解情况下选择更接近当前姿态的那一支。
+ * - out_angle_rad：输出关节角数组，长度 3，顺序：
+ *   [0] hip_roll（髋外展/内收），
+ *   [1] hip_pitch（髋俯仰），
+ *   [2] knee_pitch（膝俯仰），单位均为 rad。
+ * 返回值：
+ * - GaitIkStatus：见上方枚举定义。
  */
-uint8_t gait_calc_jacobian(const GaitLegParam *param, const float q[3], float J[3][3]);
+GaitIkStatus Gait_LegIK(uint8_t leg_idx,
+						const GaitFootPosMm *foot_pos_mm,
+						const float seed_angle_rad[3],
+						float out_angle_rad[3]);
 
 /*
- * 逆动力学：
- * tau = M(q)*ddq + C(q,dq) + G(q) + B*dq
+ * 函数：Gait_LegFK
+ * 作用：单腿正运动学，把“三关节角”转换为“足端位置”。
+ * 参数：
+ * - leg_idx：腿编号（0~ROBOT_LEG_NUM-1）。
+ * - angle_rad：输入关节角数组，长度 3，顺序：
+ *   [0] hip_roll，
+ *   [1] hip_pitch，
+ *   [2] knee_pitch，单位 rad。
+ * - out_foot_pos_mm：输出足端点（mm）。
  */
-uint8_t gait_inverse_dynamics(const GaitLegParam *param, const float q[3], const float dq[3], const float ddq[3], float tau_out[3]);
+void Gait_LegFK(uint8_t leg_idx,
+				const float angle_rad[3],
+				GaitFootPosMm *out_foot_pos_mm);
 
 /*
- * 正动力学：
- * ddq = M(q)^(-1) * (tau - C - G - B*dq)
+ * 函数：Gait_UpdateTargetAngleFromFootTarget
+ * 作用：批量 IK，把 gait 内部缓存的 4 条腿足端目标反解到 target_angle。
+ * 参数：
+ * - target_angle：输出/更新目标关节角数组 [ROBOT_LEG_NUM][MOTORS_PER_LEG]，单位 rad。
+ * - current_angle：当前关节角参考数组 [ROBOT_LEG_NUM][MOTORS_PER_LEG]（可传 NULL），
+ *   用于 IK 分支选择与首次同步。
+ * 返回值：
+ * - IK 失败的腿数量（0~ROBOT_LEG_NUM）。
  */
-uint8_t gait_forward_dynamics(const GaitLegParam *param, const float q[3], const float dq[3], const float tau[3], float ddq_out[3]);
+uint8_t Gait_UpdateTargetAngleFromFootTarget(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
+											 float current_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG]);
 
-/*
- * 通过虚功原理将足端力映射到关节力矩：
- * tau = J^T * F_foot
- */
-uint8_t gait_foot_force_to_joint_torque(const GaitLegParam *param, const float q[3], const GaitVec3 *foot_force, float tau_out[3]);
-
-/*
- * 通过雅可比逆映射将关节力矩转换为足端等效力：
- * F_foot = (J^T)^(-1) * tau
- *
- * 注意：在奇异位形附近会失败。
- */
-uint8_t gait_joint_torque_to_foot_force(const GaitLegParam *param, const float q[3], const float tau[3], GaitVec3 *foot_force_out);
-
-/*
- * 摆线轨迹
- *
- * 输入 s 为归一化相位 [0,1]
- * 输出：
- * - pos      ：位置
- * - vel_norm ：对 s 的一阶导
- * - acc_norm ：对 s 的二阶导
- *
- * 若要转换为对时间 t 的导数，需要再乘相位变化率。
- */
-uint8_t gait_cycloid_curve(const GaitVec3 *start, const GaitVec3 *end, float step_height, float s,
-                           GaitVec3 *pos, GaitVec3 *vel_norm, GaitVec3 *acc_norm);
-
-/*
- * 五次贝塞尔轨迹
- *
- * ctrl_pts 固定为 6 个控制点，对应 5 次多项式。
- */
-uint8_t gait_bezier_curve_5th(const GaitVec3 ctrl_pts[6], float s,
-                              GaitVec3 *pos, GaitVec3 *vel_norm, GaitVec3 *acc_norm);
-
-/*
- * 单个完整步态周期的足端轨迹规划
- *
- * 输入 phase01 可以是任意实数，函数内部会包裹到 [0,1)
- * - 摆动相：从 lift_off_pos -> touch_down_pos
- * - 支撑相：从 touch_down_pos 平滑回到 lift_off_pos
- *
- * 输出 vel / acc 为物理时间下的导数（SI 单位）
- */
-uint8_t gait_plan_foot_trajectory(const GaitTrajectoryParam *param, float phase01,
-                                  GaitVec3 *pos, GaitVec3 *vel, GaitVec3 *acc);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
+#endif /* __GAIT_H：头文件结束。 */

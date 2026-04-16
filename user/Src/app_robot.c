@@ -2,19 +2,23 @@
 #include "cmsis_os.h"
 #include "M8010.h"
 #include "robot_map.h"
+#include "gait.h"
 #include "vofa.h"
 #include <math.h>
 
-#define APP_INTERP_DT_MS 1.0f /* 每次调用插值函数时，默认推进 1ms 的相位。 */
-#define APP_INTERP_DT_MAX_MS 20.0f /* 实测 dt 的上限保护，防止调试停顿后一步跳太大。 */
-#define APP_INTERP_MIN_DURATION_MS 300.0f /* 单次插值最短持续时间，防止动作太猛。 */
-#define APP_INTERP_MAX_DURATION_MS 2000.0f /* 单次插值最长持续时间，防止动作过慢。 */
-#define APP_INTERP_SPEED_RAD_PER_S 0.8f /* 依据角度差推算时长时使用的期望角速度(rad/s)。 */
-#define APP_INTERP_TARGET_EPS 1.0e-4f /* 目标变化阈值，小于该值视为同一目标。 */
+#define APP_INTERP_DT_MS 1.0f                            /* 每次调用插值函数时，默认推进 1ms 的相位。 */
+#define APP_INTERP_DT_MAX_MS 20.0f                       /* 实测 dt 的上限保护，防止调试停顿后一步跳太大。 */
+#define APP_INTERP_MIN_DURATION_MS 300.0f                /* 单次插值最短持续时间，防止动作太猛。 */
+#define APP_INTERP_MAX_DURATION_MS 2000.0f               /* 单次插值最长持续时间，防止动作过慢。 */
+#define APP_INTERP_SPEED_RAD_PER_S 0.8f                  /* 依据角度差推算时长时使用的期望角速度(rad/s)。 */
+#define APP_INTERP_TARGET_EPS 1.0e-4f                    /* 目标变化阈值，小于该值视为同一目标。 */
 #define APP_MOTOR_COUNT (ROBOT_LEG_NUM * MOTORS_PER_LEG) /* 4 条腿 x 每腿 3 个电机 = 12。 */
+#define APP_GEAR_RATIO 6.33f                         //电机转子减速比
 
 /* 上层算法写入的 12 路目标角（单位 rad），按 [腿][关节] 索引。 */
 float Target_Angle[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
+/* 当前关节相对角全局缓存：每周期由 PosRel 刷新，供 IK 分支选择使用。 */
+float current_angle_rel[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
 /* 保存每个电机本周期算出的平滑目标角，便于调试和可视化。 */
 static float g_smoothed_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
 /* 当前正在计算第几个电机（0~11），供单电机插值函数选择对应状态槽。 */
@@ -33,6 +37,34 @@ static void app_interp_set_ctx(uint8_t idx)
     {
         /* 异常索引时回落到 0，避免数组越界。 */
         g_interp_ctx_idx = 0U;
+    }
+}
+
+/*
+ * 从电机反馈中提取“当前相对角矩阵”（单位 rad）。
+ *
+ * 说明：
+ * 1) 这里读取的是 motor_r.PosRel；
+ * 2) PosRel 已在总线层按 sign 处理为统一关节方向；
+ * 3) 输出矩阵布局与 Target_Angle 相同，均为 [腿][关节]。
+ */
+//之前那个处理之后的角度不是存储在 motor_r.PosRel 里吗？这个函数就是把这个存到二元数组里面
+static void app_get_current_angle_from_posrel(Leg leg[ROBOT_LEG_NUM])
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    if (leg == NULL)
+    {
+        return;
+    }
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            current_angle_rel[leg_idx][motor_idx] = leg[leg_idx].motors_peer_leg[motor_idx].motor_r.PosRel;
+        }
     }
 }
 
@@ -85,9 +117,16 @@ static float app_get_real_dt_ms(void)
  * 后续若新增状态估计/任务管理，也建议从这里统一初始化。
  */
 void App_Robot_Init(void)
-{ // 电机参数初始化，485端口和电机绑定
+{ // 电机参数初始化，485端口和电机绑定，初始化第一次，发送全空命令，先get到一次回传，拿到零位
     cmd_init();
+    //直接把腿和485端口绑定
     RobotMap_Init();
+    // 这里是新加的
+    Gait_Init();
+    /* 默认保持 IK 关闭，避免影响现有 test_angle 角度控制链路。 */
+    /* 若要切换到足端坐标控制，请在上层调用：Gait_EnableIkControl(1); */
+    //这个注释掉之后就是傻子位控，不带任何正逆运动学的，直接把目标角发给电机就行了。现在打开就是足端坐标控制，输入足端目标点，内部自动反解成关节角发给电机。
+    Gait_EnableIkControl(1);
     send_data_all(legs);
     cmd_single_test_init();
     VOFA_JF_DMA_Init(&hvofa, &huart6);
@@ -105,6 +144,20 @@ void App_Robot_Loop1ms(void)
 {
     /* 计算本周期真实 dt，后续 12 路插值都使用这个时间步长。 */
     g_interp_dt_ms = app_get_real_dt_ms();
+
+    /*
+     * 先尝试由 gait 的足端目标反解出关节角。
+     * - IK 关闭时，该函数不会改 Target_Angle；
+     * - IK 开启时，会把足端目标转换成 12 路目标角。
+     */
+    /*
+     * 第二个参数必须是“当前关节角”，这里使用 PosRel 反馈。
+     * 不能再传 Target_Angle，否则 IK 分支选择会失真。
+     */
+    app_get_current_angle_from_posrel(legs);
+
+    Gait_UpdateTargetAngleFromFootTarget(Target_Angle, current_angle_rel);
+
     /* 先基于最新目标角 + 反馈 PosRel 计算 12 路平滑位置。 */
     App_all_motor_claculate(Target_Angle, legs);
     /* 再统一下发本周期已经平滑后的 12 路位置命令。 */
@@ -122,7 +175,7 @@ void App_vofa_Send(void)
 
     VOFA_JF_DMA_Send(&hvofa, ch, 16);
 }
-
+// 单电机平滑计算
 float App_motor_angle_calculate(float target_angle, float pos_rel)
 {
     /* 每个电机独立的插值起点，避免 12 路电机串状态。 */
@@ -215,7 +268,7 @@ float App_motor_angle_calculate(float target_angle, float pos_rel)
     blend = 10.0f * s3 - 15.0f * s4 + 6.0f * s5;
     return start_angle[idx] + (end_angle[idx] - start_angle[idx]) * blend;
 }
-//相对角和绝对角转换
+// 相对角和绝对角转换
 float App_target_relative_to_absolute(float pos_rel,
                                       float target_angle_rel,
                                       float pos_abs,
@@ -231,9 +284,9 @@ float App_target_relative_to_absolute(float pos_rel,
      * abs_cmd = 当前绝对角 + dir * (目标相对角 - 当前相对角)
      * 这样可把“相对目标”准确映射回电机协议要的“绝对角”。
      */
-    return pos_abs + dir * delta_rel;
+    return pos_abs + dir * delta_rel * APP_GEAR_RATIO;
 }
-
+// 所有电机平滑计算
 void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
                              Leg leg[ROBOT_LEG_NUM])
 {
@@ -264,7 +317,7 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
             app_interp_set_ctx(cmd_idx);
             /* 用当前电机目标角 + 当前电机反馈角，求本周期平滑角。 */
             g_smoothed_angle[leg_idx][motor_idx] = App_motor_angle_calculate(target_angle[leg_idx][motor_idx],
-                                                                              motor->motor_r.PosRel);
+                                                                             motor->motor_r.PosRel);
 
             /* 将平滑后的相对角目标转换成电机协议所需绝对角。 */
             target_abs = App_target_relative_to_absolute(motor->motor_r.PosRel,
@@ -279,10 +332,3 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
         }
     }
 }
-
-// float (*App_Get_Smoothed_Angle(void))[MOTORS_PER_LEG]
-// {
-//     /* 返回二维数组首地址，外部可直接读取 12 路平滑结果。 */
-//     return g_smoothed_angle;
-// }
-

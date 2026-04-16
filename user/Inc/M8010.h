@@ -54,8 +54,8 @@ typedef struct
     int16_t tor_des; // 期望关节输出扭矩 unit: N.m      (q8)
     int16_t spd_des; // 期望关节输出速度 unit: rad/s    (q8)
     int32_t pos_des; // 期望关节输出位置 unit: rad      (q15)
-    int16_t k_pos;   // 期望关节刚度系数 unit: -1.0-1.0 (q15)
-    int16_t k_spd;   // 期望关节阻尼系数 unit: -1.0-1.0 (q15)
+    int16_t k_pos;   // 期望关节刚度系数 unit: (q15)
+    int16_t k_spd;   // 期望关节阻尼系数 unit: (q15)
 
 } RIS_Comd_t; // 控制参数 12Byte
 
