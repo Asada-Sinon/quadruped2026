@@ -13,59 +13,30 @@
 #define APP_INTERP_SPEED_RAD_PER_S 0.8f                  /* 依据角度差推算时长时使用的期望角速度(rad/s)。 */
 #define APP_INTERP_TARGET_EPS 1.0e-4f                    /* 目标变化阈值，小于该值视为同一目标。 */
 #define APP_MOTOR_COUNT (ROBOT_LEG_NUM * MOTORS_PER_LEG) /* 4 条腿 x 每腿 3 个电机 = 12。 */
-#define APP_GEAR_RATIO 6.33f                         //电机转子减速比
 
-/* 上层算法写入的 12 路目标角（单位 rad），按 [腿][关节] 索引。 */
+// 这个是电机输出轴的目标角度
 float Target_Angle[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
-/* 当前关节相对角全局缓存：每周期由 PosRel 刷新，供 IK 分支选择使用。 */
-float current_angle_rel[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
 /* 保存每个电机本周期算出的平滑目标角，便于调试和可视化。 */
 static float g_smoothed_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
 /* 当前正在计算第几个电机（0~11），供单电机插值函数选择对应状态槽。 */
 static uint8_t g_interp_ctx_idx = 0U;
 /* 本次控制循环测得的真实 dt(ms)，供 12 个电机共享同一时间步长。 */
 static float g_interp_dt_ms = APP_INTERP_DT_MS;
-
-static void app_interp_set_ctx(uint8_t idx)
+// 物理世界中固定的上电位置并非0位，而是有一个偏置的，这个函数就是把这个偏置加上去，得到一个更符合机械定义的角度值，方便上层算法使用。
+static float App_Get_Model_Joint_Angle(uint8_t leg_idx,
+                                       uint8_t motor_idx,
+                                       const M8010 *motor)
 {
-    /* 正常范围内就直接使用该电机编号。 */
-    if (idx < APP_MOTOR_COUNT)
-    {
-        g_interp_ctx_idx = idx;
-    }
-    else
-    {
-        /* 异常索引时回落到 0，避免数组越界。 */
-        g_interp_ctx_idx = 0U;
-    }
+    float trans_dir = (float)g_joint_transmission_sign[leg_idx][motor_idx];
+    return trans_dir * motor->motor_r.PosRel + g_joint_offset_rad[leg_idx][motor_idx];
 }
-
-/*
- * 从电机反馈中提取“当前相对角矩阵”（单位 rad）。
- *
- * 说明：
- * 1) 这里读取的是 motor_r.PosRel；
- * 2) PosRel 已在总线层按 sign 处理为统一关节方向；
- * 3) 输出矩阵布局与 Target_Angle 相同，均为 [腿][关节]。
- */
-//之前那个处理之后的角度不是存储在 motor_r.PosRel 里吗？这个函数就是把这个存到二元数组里面
-static void app_get_current_angle_from_posrel(Leg leg[ROBOT_LEG_NUM])
+// 上面函数的反算版本，模型关节角转电机相对角，输入是模型关节角，输出是电机相对角（已经考虑安装方向和零位偏置）。这个函数在 gait.c 的 Gait_UpdateTargetAngleFromFootTarget() 里被调用，用于把足端目标经过 IK 转成关节角后，再转成电机相对角发给电机。
+static float App_Model_Joint_Angle_To_Motor_Rel(uint8_t leg_idx,
+                                                uint8_t motor_idx,
+                                                float joint_angle)
 {
-    uint8_t leg_idx;
-    uint8_t motor_idx;
-
-    if (leg == NULL)
-    {
-        return;
-    }
-
-    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
-    {
-        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
-        {
-            current_angle_rel[leg_idx][motor_idx] = leg[leg_idx].motors_peer_leg[motor_idx].motor_r.PosRel;
-        }
-    }
+    float trans_dir = (float)g_joint_transmission_sign[leg_idx][motor_idx];
+    return (joint_angle - g_joint_offset_rad[leg_idx][motor_idx]) / trans_dir;
 }
 
 static float app_clampf(float in, float min_val, float max_val)
@@ -119,15 +90,15 @@ static float app_get_real_dt_ms(void)
 void App_Robot_Init(void)
 { // 电机参数初始化，485端口和电机绑定，初始化第一次，发送全空命令，先get到一次回传，拿到零位
     cmd_init();
-    //直接把腿和485端口绑定
+    // 直接把腿和485端口绑定
     RobotMap_Init();
     // 这里是新加的
     /* 默认保持 IK 关闭，避免影响现有 test_angle 角度控制链路。 */
     /* 若要切换到足端坐标控制，请在上层调用：Gait_EnableIkControl(1); */
-    //这个注释掉之后就是傻子位控，不带任何正逆运动学的，直接把目标角发给电机就行了。现在打开就是足端坐标控制，输入足端目标点，内部自动反解成关节角发给电机。
+    // 这个注释掉之后就是傻子位控，不带任何正逆运动学的，直接把目标角发给电机就行了。现在打开就是足端坐标控制，输入足端目标点，内部自动反解成关节角发给电机。
     send_data_all(legs);
-    //这里直接初始化012，左前腿。
-    cmd_single_test_init();
+    // 这里直接初始化012，左前腿。
+    //cmd_single_test_init();
     VOFA_JF_DMA_Init(&hvofa, &huart6);
 }
 
@@ -143,21 +114,10 @@ void App_Robot_Loop1ms(void)
 {
     /* 计算本周期真实 dt，后续 12 路插值都使用这个时间步长。 */
     g_interp_dt_ms = app_get_real_dt_ms();
-
-    /*
-     * 先尝试由 gait 的足端目标反解出关节角。
-     * - IK 关闭时，该函数不会改 Target_Angle；
-     * - IK 开启时，会把足端目标转换成 12 路目标角。
-     */
-    /*
-     * 第二个参数必须是“当前关节角”，这里使用 PosRel 反馈。
-     * 不能再传 Target_Angle，否则 IK 分支选择会失真。
-     */
-    app_get_current_angle_from_posrel(legs);
-
-    Gait_UpdateTargetAngleFromFootTarget(Target_Angle, current_angle_rel);
-
-    /* 先基于最新目标角 + 反馈 PosRel 计算 12 路平滑位置。 */
+    /* 当前相对角统一从 motor_r.PosRel 读取，不再维护冗余全局缓存。 */
+    // 四个腿根据足端位置，逆运动学设置关节位置
+    Gait_UpdateTargetAngleFromFootTarget(Target_Angle);
+    // 根据目标角度算平滑值，算完后面发就是这个值
     App_all_motor_claculate(Target_Angle, legs);
     /* 再统一下发本周期已经平滑后的 12 路位置命令。 */
     send_data_all(legs);
@@ -283,9 +243,10 @@ float App_target_relative_to_absolute(float pos_rel,
      * abs_cmd = 当前绝对角 + dir * (目标相对角 - 当前相对角)
      * 这样可把“相对目标”准确映射回电机协议要的“绝对角”。
      */
-    return pos_abs + dir * delta_rel;
+    //return pos_abs + dir * delta_rel;
+    return pos_abs + dir * delta_rel * ROBOT_MOTOR_GEAR_RATIO;
 }
-// 所有电机平滑计算
+// 所有电机平滑计算，算完直接给到cmd里面
 void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
                              Leg leg[ROBOT_LEG_NUM])
 {
@@ -293,13 +254,6 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
     uint8_t leg_idx;
     /* 内层关节编号 0~2。 */
     uint8_t motor_idx;
-
-    /* 空指针保护，防止异常调用导致崩溃。 */
-    if ((target_angle == NULL) || (leg == NULL))
-    {
-        return;
-    }
-
     /* 双层循环覆盖全部 12 个电机。 */
     for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
     {
@@ -309,21 +263,27 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
             uint8_t cmd_idx = (uint8_t)(leg_idx * MOTORS_PER_LEG + motor_idx);
             /* 拿到当前电机对象，后续读取 PosRel 和写入 motor_s。 */
             M8010 *motor = &leg[leg_idx].motors_peer_leg[motor_idx];
+            float current_model_angle;
+            float target_motor_rel;
             /* 当前电机最终要发送的绝对角。 */
             float target_abs;
+            g_interp_ctx_idx = cmd_idx;
 
-            /* 告诉单电机插值函数：当前正在算哪一个电机。 */
-            app_interp_set_ctx(cmd_idx);
+            current_model_angle = App_Get_Model_Joint_Angle(leg_idx, motor_idx, motor);
             /* 用当前电机目标角 + 当前电机反馈角，求本周期平滑角。 */
             g_smoothed_angle[leg_idx][motor_idx] = App_motor_angle_calculate(target_angle[leg_idx][motor_idx],
-                                                                             motor->motor_r.PosRel);
+                                                                             current_model_angle);
+                  /* 模型关节目标角 -> 电机相对角 */
+            target_motor_rel =
+                App_Model_Joint_Angle_To_Motor_Rel(leg_idx,
+                                                   motor_idx,
+                                                   g_smoothed_angle[leg_idx][motor_idx]);
 
-            /* 将平滑后的相对角目标转换成电机协议所需绝对角。 */
+           /* 电机相对角 -> 电机绝对角命令 */
             target_abs = App_target_relative_to_absolute(motor->motor_r.PosRel,
-                                                         g_smoothed_angle[leg_idx][motor_idx],
+                                                         target_motor_rel,
                                                          motor->motor_r.Pos,
                                                          motor->sign);
-
             /* 同步保存绝对角到电机对象，便于本地状态查看。 */
             motor->motor_s.Pos = target_abs;
             /* 直接写入发送缓冲 cmd[]，保证 send_data_all 可直接发送。 */
@@ -331,3 +291,45 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
         }
     }
 }
+// 根据电机当前角度来计算当前足端位置
+float joint_pos[3];
+void App_UpdateCurrentFootPosFromMotor(Leg leg[ROBOT_LEG_NUM])
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        //float joint_pos[3];
+        float foot_pos[3];
+        uint8_t valid = 1U;
+
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            M8010 *motor = &leg[leg_idx].motors_peer_leg[motor_idx];
+
+            /* 如果这一关节还没有有效回传，就先不更新这一条腿 */
+            if ((motor->motor_r.PosZeroInited == 0U) || (motor->motor_r.correct == 0))
+            {
+                valid = 0U;
+                break;
+            }
+
+            /* 当前模型角 = 当前相对角 + 固定偏置 */
+            joint_pos[motor_idx] = App_Get_Model_Joint_Angle(leg_idx, motor_idx, motor);
+        }
+
+        if (valid == 0U)
+        {
+            continue;
+        }
+
+        /* 用模型角做正运动学，得到当前足端位置 */
+        leg_forward_kinematics(leg_idx, joint_pos, foot_pos);
+
+        g_foot_current_m[leg_idx].x_m = foot_pos[X_IDX];
+        g_foot_current_m[leg_idx].y_m = foot_pos[Y_IDX];
+        g_foot_current_m[leg_idx].z_m = foot_pos[Z_IDX];
+    }
+}
+

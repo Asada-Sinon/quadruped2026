@@ -4,6 +4,7 @@
 #include <string.h>
 #include "usart.h"
 #include "robot_map.h"
+#define M8010_TWO_PI 6.28318530718f
 /*
  * M8010 协议编解码实现。
  *
@@ -106,8 +107,8 @@ void modify_data(MotorCmd_t *motor_s)
 	motor_s->motor_send_data.mode.status = motor_s->mode;
 	motor_s->motor_send_data.comd.k_pos = motor_s->K_P / 25.6f * 32768.0f;
 	motor_s->motor_send_data.comd.k_spd = motor_s->K_W / 25.6f * 32768.0f;
-	motor_s->motor_send_data.comd.pos_des = motor_s->Pos / 6.28318f * 32768.0f;
-	motor_s->motor_send_data.comd.spd_des = motor_s->W / 6.28318f * 256.0f;
+    motor_s->motor_send_data.comd.pos_des = motor_s->Pos / M8010_TWO_PI * 32768.0f;
+    motor_s->motor_send_data.comd.spd_des = motor_s->W   / M8010_TWO_PI * 256.0f;
 	motor_s->motor_send_data.comd.tor_des = motor_s->T * 256.0f;
 
 	/* 4) 计算并填入帧 CRC（不包含 CRC 字段本身）。 */
@@ -141,15 +142,16 @@ void extract_data(MotorData_t *motor_r)
 		motor_r->mode = motor_r->motor_recv_data.mode.status;
 		motor_r->Temp = motor_r->motor_recv_data.fbk.temp;
 		motor_r->MError = motor_r->motor_recv_data.fbk.MError;
-		motor_r->W = ((float)motor_r->motor_recv_data.fbk.speed / 256.0f) * 6.28318f;
+		motor_r->W = ((float)motor_r->motor_recv_data.fbk.speed / 256.0f) * M8010_TWO_PI;
 		motor_r->T = ((float)motor_r->motor_recv_data.fbk.torque) / 256.0f;
-		motor_r->Pos = 6.28318f * ((float)motor_r->motor_recv_data.fbk.pos) / 32768.0f;
+		motor_r->Pos = M8010_TWO_PI * ((float)motor_r->motor_recv_data.fbk.pos) / 32768.0f;
 		if (motor_r->PosZeroInited == 0U)
 		{
 			motor_r->PosZero = motor_r->Pos;
 			motor_r->PosZeroInited = 1U;
 		}
-		motor_r->PosRel = motor_r->Pos - motor_r->PosZero;
+		motor_r->PosRel = (motor_r->Pos - motor_r->PosZero) / ROBOT_MOTOR_GEAR_RATIO;
+		//motor_r->PosRel = motor_r->Pos - motor_r->PosZero;
 		motor_r->footForce = motor_r->motor_recv_data.fbk.force;
 		motor_r->correct = 1;
 		return;
@@ -216,13 +218,6 @@ void cmd_single_test_init(void)
 
 void set_cmd_pos_by_index(uint8_t cmd_idx, float pos)
 {
-	/* 边界保护：只允许访问 12 个电机命令槽位(0~11)。 */
-	if (cmd_idx >= 12U)
-	{
-		/* 非法下标直接返回，避免数组越界。 */
-		return;
-	}
-
 	/* 写入该电机本次要发送的位置目标。 */
 	cmd[cmd_idx].Pos = pos;
 	/* 位置更新后立刻重打包，确保发送字节流同步更新。 */

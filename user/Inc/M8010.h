@@ -126,8 +126,8 @@ typedef struct
     int MError;             // 错误码
     float T;                // 当前实际电机输出力矩(电机本身的力矩)(Nm)
     float W;                // 当前实际电机速度(电机本身的速度)(rad/s)
-    float Pos;              // 当前电机位置(rad)，原始回传角度
-    float PosRel;           // 首次有效回传置零后的相对位置(rad)
+    float Pos;              // 转子的rad
+    float PosRel;           // 输出轴的rad，相对位置版本
     float PosZero;          // 首次有效回传角度，作为零位基准
     unsigned char PosZeroInited; // 零位基准是否已锁定
     int correct;            // 接收数据是否完整(1完整，0不完整)

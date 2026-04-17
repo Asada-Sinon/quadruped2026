@@ -7,6 +7,8 @@
 #include "M8010.h"
 #define ROBOT_LEG_NUM 4
 #define MOTORS_PER_LEG 3
+/* GO-M8010-6 减速比：输出端 1 rad <-> 转子侧 6.33 rad */
+#define ROBOT_MOTOR_GEAR_RATIO 6.33f
 
 typedef struct Leg
 {
@@ -33,7 +35,8 @@ typedef struct
 
 extern Leg legs[ROBOT_LEG_NUM];
 extern LegRealSize leg_real_size; // 单腿真实几何尺寸参数（按实测值保存，单位 m）
-
+extern float g_joint_offset_rad[ROBOT_LEG_NUM][MOTORS_PER_LEG];//初始位置偏置，单位 rad
+extern int g_joint_transmission_sign[ROBOT_LEG_NUM][MOTORS_PER_LEG];
 // 用实测值初始化 leg_real_size。
 // 单位全部使用 m。
 void RobotMap_InitLegRealSize(void);

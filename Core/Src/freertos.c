@@ -58,7 +58,7 @@ osThreadId myTask03Handle;
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 //int test = 0;
-float test_angle[3] = {0, 0, 0};
+float test_position[3] = {0, 0, 0};
 //float test_angle[3] = {-5.15, -0.61, 5.47};
 /* USER CODE END FunctionPrototypes */
 
@@ -142,25 +142,8 @@ void motor(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    // if(test == 1)
-    // {
-    //   Target_Angle[0][0] = test_angle[0];
-    //   Target_Angle[0][1] = test_angle[1];
-    //   Target_Angle[0][2] = test_angle[2];
-
-    //   Target_Angle[1][0] = test_angle[0];
-    //   Target_Angle[1][1] = test_angle[1];
-    //   Target_Angle[1][2] = test_angle[2];
-
-    //   Target_Angle[2][0] = test_angle[0];
-    //   Target_Angle[2][1] = test_angle[1];
-    //   Target_Angle[2][2] = test_angle[2];
-
-    //   Target_Angle[3][0] = test_angle[0];
-    //   Target_Angle[3][1] = test_angle[1];
-    //   Target_Angle[3][2] = test_angle[2];
-    // }
-    Gait_SetLegFootTargetM(3, test_angle[0], test_angle[1], test_angle[2]);
+    //足端单位是m
+    Gait_SetLegFootTargetM(0, test_position[0], test_position[1], test_position[2]);
     App_Robot_Loop1ms();
     osDelay(3);
   }
@@ -199,7 +182,7 @@ void calculate(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-
+    App_UpdateCurrentFootPosFromMotor(legs);
     osDelay(1);
   }
   /* USER CODE END calculate */

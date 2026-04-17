@@ -2,12 +2,15 @@
 #include "robot_map.h"
 #include <math.h>
 #include <string.h>
-
+//这正逆运动学里面的角度都是弧度，所有的角度都是关节角度，也就是输出侧的角度
 #define GAIT_NUMERIC_EPS 1.0e-6f
 #define GAIT_IK_DOMAIN_EPS 1.0e-4f
 #define PI 3.14159265358979323846f
 /* 4 条腿的足端目标缓存（髋关节局部坐标系，单位 m）。 */
 GaitFootPosM g_foot_target_m[ROBOT_LEG_NUM] = {0};
+/* 4 条腿当前足端位置缓存（髋关节局部坐标系，单位 m）。 */
+GaitFootPosM g_foot_current_m[ROBOT_LEG_NUM] = {0};
+//x狗头方向，y左，z上
 
 // 逆运动学，输入足端位置，输出关节角
 void gait_inverse_kinematics_core(uint8_t leg_id, const float foot_pos[3], float joint_pos[3])
@@ -134,9 +137,8 @@ uint8_t Gait_SetLegFootTargetM(uint8_t leg_idx, float x_m, float y_m, float z_m)
 	g_foot_target_m[leg_idx].z_m = z_m;
 	return 0U;
 }
-// 给设定三个电机的目标位置
-void Gait_UpdateTargetAngleFromFootTarget(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
-										  float current_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG])
+//四个腿根据设置的足端位置设置关节位置
+void Gait_UpdateTargetAngleFromFootTarget(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG])
 {
 	uint8_t leg_idx;
 	for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)

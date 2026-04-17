@@ -40,8 +40,7 @@ void App_vofa_Send(void);
  */
 extern float Target_Angle[ROBOT_LEG_NUM][MOTORS_PER_LEG];
 
-/* 当前关节相对角反馈缓存（来自各电机 motor_r.PosRel），单位 rad。 */
-extern float current_angle_rel[ROBOT_LEG_NUM][MOTORS_PER_LEG];
+/* 当前相对角请直接读取 leg[x].motors_peer_leg[y].motor_r.PosRel（单位 rad）。 */
 
 /*
  * 关节角平滑插值：
@@ -73,11 +72,6 @@ float App_target_relative_to_absolute(float pos_rel,
  */
 void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
                              Leg leg[ROBOT_LEG_NUM]);
-
-/*
- * 返回值是一个二维数组指针：
- * - 指向 [ROBOT_LEG_NUM][MOTORS_PER_LEG] 的平滑角缓存
- * - 读取后可直接用于日志/可视化，不建议外部改写
- */
-float (*App_Get_Smoothed_Angle(void))[MOTORS_PER_LEG];
+//根据电机当前角度来计算当前足端位置
+void App_UpdateCurrentFootPosFromMotor(Leg leg[ROBOT_LEG_NUM]);
 #endif
