@@ -7,6 +7,8 @@
 #include <math.h>
 #include "trajectory.h"
 #include "HT10A.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define APP_INTERP_DT_MS 1.0f                            /* 每次调用插值函数时，默认推进 1ms 的相位。 */
 #define APP_INTERP_DT_MAX_MS 20.0f                       /* 实测 dt 的上限保护，防止调试停顿后一步跳太大。 */
@@ -23,6 +25,17 @@
 #define APP_DEFAULT_WALK_STEP_LENGTH_M (0.10f)
 /* 匍匐模式相对 WALK 的固定 z 偏移：四足统一上移 0.1m。 */
 #define APP_CRAWL_Z_OFFSET_M (0.10f)
+/* FREE_MOVE 摇杆原始范围与死区。 */
+#define APP_FREE_RC_AXIS_RAW_LIMIT (10000.0f)
+#define APP_FREE_RC_DEADZONE_RAW (800.0f)
+/* FREE_MOVE 保守速度标定（摇杆打满对应值）。 */
+#define APP_FREE_VX_MAX_M_S (0.20f)
+#define APP_FREE_VY_MAX_M_S (0.15f)
+#define APP_FREE_W_MAX_RAD_S (0.80f)
+/* 若后续发现方向相反，只需改这 3 个符号即可。 */
+#define APP_FREE_VX_SIGN (1.0f)
+#define APP_FREE_VY_SIGN (-1.0f)
+#define APP_FREE_W_SIGN (-1.0f)
 
 typedef struct
 {
@@ -113,6 +126,72 @@ static float app_clampf(float in, float min_val, float max_val)
     return in;
 }
 
+/* 把遥控原始轴值映射到 [-1,1]：
+ * 1) 先按原始量限幅；
+ * 2) 应用死区；
+ * 3) 去死区后归一化。
+ */
+static float app_map_rc_axis_to_unit(float raw_axis)
+{
+    float abs_axis;
+    float span;
+
+    raw_axis = app_clampf(raw_axis,
+                          -APP_FREE_RC_AXIS_RAW_LIMIT,
+                          APP_FREE_RC_AXIS_RAW_LIMIT);
+    abs_axis = fabsf(raw_axis);
+    if (abs_axis <= APP_FREE_RC_DEADZONE_RAW)
+    {
+        return 0.0f;
+    }
+
+    span = APP_FREE_RC_AXIS_RAW_LIMIT - APP_FREE_RC_DEADZONE_RAW;
+    if (span <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    if (raw_axis > 0.0f)
+    {
+        return (raw_axis - APP_FREE_RC_DEADZONE_RAW) / span;
+    }
+
+    return (raw_axis + APP_FREE_RC_DEADZONE_RAW) / span;
+}
+
+/* 从遥控全局数据抓取 FREE_MOVE 速度命令（m/s, rad/s）。 */
+static void App_GetFreeMoveVelocityCmd(float *vx_m_s,
+                                       float *vy_m_s,
+                                       float *w_rad_s)
+{
+    float rc_vx_raw;
+    float rc_vy_raw;
+    float rc_w_raw;
+    float vx_unit;
+    float vy_unit;
+    float w_unit;
+
+    if ((vx_m_s == 0) || (vy_m_s == 0) || (w_rad_s == 0))
+    {
+        return;
+    }
+
+    /* ISR 在更新 Teaching_Pendant，任务侧读取时做一次短临界区快照。 */
+    taskENTER_CRITICAL();
+    rc_vx_raw = Teaching_Pendant.Vx;
+    rc_vy_raw = Teaching_Pendant.Vy;
+    rc_w_raw = Teaching_Pendant.Vw;
+    taskEXIT_CRITICAL();
+
+    vx_unit = app_map_rc_axis_to_unit(rc_vx_raw);
+    vy_unit = app_map_rc_axis_to_unit(rc_vy_raw);
+    w_unit = app_map_rc_axis_to_unit(rc_w_raw);
+
+    *vx_m_s = APP_FREE_VX_SIGN * vx_unit * APP_FREE_VX_MAX_M_S;
+    *vy_m_s = APP_FREE_VY_SIGN * vy_unit * APP_FREE_VY_MAX_M_S;
+    *w_rad_s = APP_FREE_W_SIGN * w_unit * APP_FREE_W_MAX_RAD_S;
+}
+
 static float app_get_real_dt_ms(void)
 {
     /* 记录上一周期的系统 tick（单位 ms）。 */
@@ -148,7 +227,8 @@ static uint8_t app_is_valid_mode(RobotControlMode mode)
 {
     if ((mode == ROBOT_MODE_STAND) ||
         (mode == ROBOT_MODE_WALK) ||
-        (mode == ROBOT_MODE_CRAWL))
+        (mode == ROBOT_MODE_CRAWL) ||
+        (mode == ROBOT_MODE_FREE_MOVE))
     {
         return 1U;
     }
@@ -202,9 +282,11 @@ static void App_SyncWalkNominalFromStandPose(void)
 /* 状态切换入口动作：只做一次的初始化/收尾放在这里，避免散落到主循环。 */
 static void App_HandleModeEntry(RobotControlMode mode)
 {
-    if ((mode == ROBOT_MODE_WALK) || (mode == ROBOT_MODE_CRAWL))
+    if ((mode == ROBOT_MODE_WALK) ||
+        (mode == ROBOT_MODE_CRAWL) ||
+        (mode == ROBOT_MODE_FREE_MOVE))
     {
-        /* 进入 WALK/CRAWL 前先把轨迹中心对齐到当前 STAND 位姿。 */
+        /* 进入行走相关模式前先把轨迹中心对齐到当前 STAND 位姿。 */
         App_SyncWalkNominalFromStandPose();
         /* 行走相关模式首次进入时设置电机参数，后续不重复发。 */
         if (g_app_ctrl.walk_cmd_inited == 0U)
@@ -251,6 +333,7 @@ static void App_UpdateWalkFootTarget(float dt_s)
     Trajectory_SetStepLength(&g_gait, g_app_ctrl.walk_step_length_m);
     Trajectory_SetFrequency(&g_gait, g_app_ctrl.walk_freq_hz);
     Trajectory_SetSwingHeight(&g_gait, g_app_ctrl.walk_swing_height_m);
+    Trajectory_SetBodyVelocity(&g_gait, 0.0f, 0.0f, 0.0f);
     Trajectory_Update(&g_gait, dt_s);
 }
 
@@ -271,6 +354,26 @@ static void App_UpdateCrawlFootTarget(float dt_s)
                                g_foot_target_m[leg_idx].y_m,
                                g_foot_target_m[leg_idx].z_m + APP_CRAWL_Z_OFFSET_M);
     }
+}
+
+/* 自由运动模式：
+ * 1) 频率/抬脚高度仍沿用当前 WALK 参数（按你的要求不被摇杆覆盖）；
+ * 2) 摇杆实时控制 body-frame Vx/Vy/Vw，实现全向平移 + 自转；
+ * 3) 该模式不使用固定前后步长，故 step_length 置零。
+ */
+static void App_UpdateFreeMoveFootTarget(float dt_s)
+{
+    float vx_cmd_m_s;
+    float vy_cmd_m_s;
+    float w_cmd_rad_s;
+
+    App_GetFreeMoveVelocityCmd(&vx_cmd_m_s, &vy_cmd_m_s, &w_cmd_rad_s);
+
+    Trajectory_SetFrequency(&g_gait, g_app_ctrl.walk_freq_hz);
+    Trajectory_SetSwingHeight(&g_gait, g_app_ctrl.walk_swing_height_m);
+    Trajectory_SetStepLength(&g_gait, 0.0f);
+    Trajectory_SetBodyVelocity(&g_gait, vx_cmd_m_s, vy_cmd_m_s, w_cmd_rad_s);
+    Trajectory_Update(&g_gait, dt_s);
 }
 // 修改模式
 void App_SetControlMode(RobotControlMode mode)
@@ -335,7 +438,8 @@ void App_SetStandPose(const float stand_x_m_by_leg[ROBOT_LEG_NUM],
 
     /*
      * 仅在 STAND 模式下立即同步 nominal；
-     * 若当前正在 WALK/CRAWL，则把新参数缓存起来，等下次进入该模式前再同步，避免运行中跳变。
+     * 若当前正在 WALK/CRAWL/FREE_MOVE，则把新参数缓存起来，
+     * 等下次进入该模式前再同步，避免运行中跳变。
      */
     if (g_app_ctrl.mode == ROBOT_MODE_STAND)
     {
@@ -350,6 +454,10 @@ void App_SetStandPose(const float stand_x_m_by_leg[ROBOT_LEG_NUM],
  */
 void App_Robot_Init(void)
 { // 电机参数初始化，485端口和电机绑定，初始化第一次，发送全空命令，先get到一次回传，拿到零位
+    MotorBus_Restart(LEG_FL);
+    MotorBus_Restart(LEG_FR);
+    MotorBus_Restart(LEG_HL);
+    MotorBus_Restart(LEG_HR);
     cmd_init();
     // 直接把腿和485端口绑定
     RobotMap_Init();
@@ -368,7 +476,7 @@ float bios = 0.015f; // 前腿相对后腿的额外抬高，默认多抬高 1.5c
 /*
  * 业务 1ms 主循环：
  * 1) 读取当前系统 tick；
- * 2) 按 STAND/WALK/CRAWL 状态机刷新足端目标；
+ * 2) 按 STAND/WALK/CRAWL/FREE_MOVE 状态机刷新足端目标；
  * 3) 推进一次通信状态机。
  *
  * 注意：这里不做阻塞延时，实时性由外层 1ms 调度保障。
@@ -401,6 +509,10 @@ void App_Robot_Loop1ms(void)
         App_UpdateCrawlFootTarget(dt_s);
         break;
 
+    case ROBOT_MODE_FREE_MOVE:
+        App_UpdateFreeMoveFootTarget(dt_s);
+        break;
+
     default:
         /* 非法模式回退到 STAND，保证控制链路可预期。 */
         g_app_ctrl.mode = ROBOT_MODE_STAND;
@@ -415,6 +527,10 @@ void App_Robot_Loop1ms(void)
     // 站立：电机插值平滑；行走/匍匐：直接跟踪 IK 输出，避免“轨迹 + 电机”双层平滑带来的滞后
     App_all_motor_claculate(Target_Angle, legs);
     /* 再统一下发本周期已经平滑后的 12 路位置命令。 */
+    send_data_all(legs);
+}
+void App_Robot_Send_Loop(void)
+{
     send_data_all(legs);
 }
 float ch[VOFA_JF_MAX_CH] = {0};
@@ -563,7 +679,7 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
             }
             else
             {
-                /* 行走/匍匐模式关闭电机插值：轨迹层已经生成连续足端轨迹，这里直接跟踪 IK 输出。 */
+                /* 行走/匍匐/自由运动模式关闭电机插值：轨迹层已保证轨迹连续，这里直接跟踪 IK 输出。 */
                 control_model_angle = target_angle[leg_idx][motor_idx];
             }
 

@@ -5,6 +5,7 @@
 #include "usart.h"
 #include "robot_map.h"
 #define M8010_TWO_PI 6.28318530718f
+#define M8010_DMA_WAIT_TIMEOUT_MS 5U
 /*
  * M8010 协议编解码实现。
  *
@@ -160,6 +161,104 @@ void extract_data(MotorData_t *motor_r)
 
 MotorCmd_t cmd[12];
 MotorData_t recv;
+
+/* 4 路 485 口对应的 DMA 接收缓冲（每路 1 帧）。 */
+static uint8_t g_motor_dma_rx_buf[ROBOT_LEG_NUM][sizeof(RIS_MotorData_t)] = {0};
+/* 当前发送等待的目标电机 ID（用于匹配回包）。 */
+static volatile uint8_t g_motor_dma_expected_id[ROBOT_LEG_NUM] = {0};
+/* 本轮是否收到回包。 */
+static volatile uint8_t g_motor_dma_rx_done[ROBOT_LEG_NUM] = {0};
+/* 本轮回包是否匹配目标电机且校验通过。 */
+static volatile uint8_t g_motor_dma_rx_match[ROBOT_LEG_NUM] = {0};
+
+void MotorBus_Restart(uint8_t leg_idx)
+{
+	UART_HandleTypeDef *huart;
+
+	if (leg_idx >= ROBOT_LEG_NUM)
+	{
+		return;
+	}
+
+	huart = legs[leg_idx].huart;
+	if (huart == NULL)
+	{
+		return;
+	}
+
+	/* 发送完成后切回接收方向。 */
+	HAL_GPIO_WritePin(legs[leg_idx].dir_port, legs[leg_idx].dir_pin, GPIO_PIN_RESET);
+
+	/* 启动 DMA 接收 1 帧电机反馈。 */
+	if (HAL_UART_Receive_DMA(huart,
+						 g_motor_dma_rx_buf[leg_idx],
+						 sizeof(RIS_MotorData_t)) != HAL_OK)
+	{
+		/* 启动失败时直接标记本轮失败，避免发送线程一直等待。 */
+		g_motor_dma_rx_done[leg_idx] = 1U;
+		g_motor_dma_rx_match[leg_idx] = 0U;
+		return;
+	}
+
+	/* 关闭半传输中断，避免 16B 帧中途打断。 */
+	if (huart->hdmarx != NULL)
+	{
+		__HAL_DMA_DISABLE_IT(huart->hdmarx, DMA_IT_HT);
+	}
+}
+
+void MotorBus_Process(uint8_t leg_idx, uint16_t size)
+{
+	RIS_MotorData_t *rx_frame;
+	M8010 *motor;
+	uint8_t motor_id;
+
+	if (leg_idx >= ROBOT_LEG_NUM)
+	{
+		return;
+	}
+
+	g_motor_dma_rx_done[leg_idx] = 1U;
+	g_motor_dma_rx_match[leg_idx] = 0U;
+
+	if (size < sizeof(RIS_MotorData_t))
+	{
+		return;
+	}
+
+	rx_frame = (RIS_MotorData_t *)g_motor_dma_rx_buf[leg_idx];
+	motor_id = (uint8_t)rx_frame->mode.id;
+	motor = NULL;
+
+	/* 按电机 ID 分发到这一路 485 对应的 3 个电机槽位。 */
+	if (motor_id == legs[leg_idx].motors_peer_leg[0].motor_s.id)
+	{
+		motor = &legs[leg_idx].motors_peer_leg[0];
+	}
+	else if (motor_id == legs[leg_idx].motors_peer_leg[1].motor_s.id)
+	{
+		motor = &legs[leg_idx].motors_peer_leg[1];
+	}
+	else if (motor_id == legs[leg_idx].motors_peer_leg[2].motor_s.id)
+	{
+		motor = &legs[leg_idx].motors_peer_leg[2];
+	}
+
+	if (motor != NULL)
+	{
+		memcpy(&motor->motor_r.motor_recv_data, rx_frame, sizeof(RIS_MotorData_t));
+		extract_data(&motor->motor_r);
+		if (motor->motor_r.correct != 0)
+		{
+			motor->motor_r.PosRel *= (float)motor->sign;
+			if (motor_id == g_motor_dma_expected_id[leg_idx])
+			{
+				g_motor_dma_rx_match[leg_idx] = 1U;
+			}
+		}
+	}
+}
+
 void cmd_init(void)
 {
 	for (int i = 0; i < 12; i++)
@@ -262,22 +361,45 @@ void send_data_all(Leg *leg)
 		{
 			int cmd_idx = leg_idx * MOTORS_PER_LEG + motor_idx;
 			M8010 *motor = &leg[leg_idx].motors_peer_leg[motor_idx];
+			uint32_t start_tick;
+
+			/* 为本轮发送准备回包匹配状态。 */
+			g_motor_dma_expected_id[leg_idx] = (uint8_t)cmd[cmd_idx].id;
+			g_motor_dma_rx_done[leg_idx] = 0U;
+			g_motor_dma_rx_match[leg_idx] = 0U;
 
 			HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_SET);
-			HAL_UART_Transmit(leg[leg_idx].huart,
+			if (HAL_UART_Transmit_DMA(leg[leg_idx].huart,
 							  (uint8_t *)&cmd[cmd_idx].motor_send_data,
-							  sizeof(RIS_ControlData_t),
-							  100);
-			HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
-
-			HAL_UART_Receive(leg[leg_idx].huart,
-							 (uint8_t *)&motor->motor_r.motor_recv_data,
-							 sizeof(RIS_MotorData_t),
-							 100);
-			extract_data(&motor->motor_r);
-			if (motor->motor_r.correct)
+							  sizeof(RIS_ControlData_t)) != HAL_OK)
 			{
-				motor->motor_r.PosRel *= (float)motor->sign;
+				HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
+				motor->motor_r.timeout++;
+				continue;
+			}
+
+			/*
+			 * 等待本轮回包：
+			 * - TxCplt 回调里会启动 HAL_UART_Receive_DMA；
+			 * - RxCplt 回调里会调用 MotorBus_Process 置位 rx_done。
+			 */
+			start_tick = HAL_GetTick();
+			while (g_motor_dma_rx_done[leg_idx] == 0U)
+			{
+				if ((HAL_GetTick() - start_tick) >= M8010_DMA_WAIT_TIMEOUT_MS)
+				{
+					(void)HAL_UART_AbortTransmit(leg[leg_idx].huart);
+					(void)HAL_UART_AbortReceive(leg[leg_idx].huart);
+					HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
+					motor->motor_r.timeout++;
+					break;
+				}
+			}
+
+			if ((g_motor_dma_rx_done[leg_idx] != 0U) &&
+				(g_motor_dma_rx_match[leg_idx] == 0U))
+			{
+				motor->motor_r.timeout++;
 			}
 		}
 	}

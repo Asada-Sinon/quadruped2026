@@ -3,6 +3,11 @@
 
 #define TRAJ_MAX_STEP_LENGTH_M 0.100f
 #define TRAJ_MAX_SWING_HEIGHT_M 0.200f
+/* FREE_MOVE 机体速度限幅（与遥控保守标定一致）。 */
+#define TRAJ_MAX_BODY_VX_M_S 0.20f
+#define TRAJ_MAX_BODY_VY_M_S 0.15f
+#define TRAJ_MAX_BODY_W_RAD_S 0.80f
+#define TRAJ_MIN_EFFECTIVE_FREQ_HZ 1.0e-4f
 /* 前腿摆动高度偏置的上限保护，避免叠加后抬脚过大。 */
 #define TRAJ_MAX_FRONT_SWING_BIAS_M 0.100f
 /* 默认前腿在摆动相比后腿额外多抬 1.5cm。 */
@@ -23,6 +28,33 @@ static float traj_clampf(float x, float min_val, float max_val)
         return max_val;
     }
     return x;
+}
+
+/* 对二维步幅做限幅：
+ * 1) x/y 分量先各自限幅；
+ * 2) 再限制平面向量模长不超过 TRAJ_MAX_STEP_LENGTH_M，
+ *    防止组合运动（平移+自转）导致单腿步幅过大。
+ */
+static void Trajectory_ClampPlanarStep(float *step_x_m, float *step_y_m)
+{
+    float mag;
+    float scale;
+
+    if ((step_x_m == 0) || (step_y_m == 0))
+    {
+        return;
+    }
+
+    *step_x_m = traj_clampf(*step_x_m, -TRAJ_MAX_STEP_LENGTH_M, TRAJ_MAX_STEP_LENGTH_M);
+    *step_y_m = traj_clampf(*step_y_m, -TRAJ_MAX_STEP_LENGTH_M, TRAJ_MAX_STEP_LENGTH_M);
+
+    mag = sqrtf((*step_x_m) * (*step_x_m) + (*step_y_m) * (*step_y_m));
+    if (mag > TRAJ_MAX_STEP_LENGTH_M)
+    {
+        scale = TRAJ_MAX_STEP_LENGTH_M / mag;
+        *step_x_m *= scale;
+        *step_y_m *= scale;
+    }
 }
 
 /* 初始化运行时参考点 */
@@ -120,16 +152,20 @@ static void Trajectory_GetLegPhase(uint8_t leg_idx,
 static GaitFootPosM Trajectory_GenerateNominalCenteredFoot(const GaitFootPosM *nominal,
                                                            StepLegState leg_state,
                                                            float local_phase,
-                                                           float step_length_m,
+                                                           float step_x_m,
+                                                           float step_y_m,
                                                            float swing_height_m)
 {
     GaitFootPosM out;
     float s;
     float prog;
     float lift;
-    float half_step;
+    float half_step_x;
+    float half_step_y;
     float x_rear;
     float x_front;
+    float y_rear;
+    float y_front;
 
     if (nominal == 0)
     {
@@ -140,29 +176,31 @@ static GaitFootPosM Trajectory_GenerateNominalCenteredFoot(const GaitFootPosM *n
     }
 
     /* 轨迹参数限幅，防止上层给过大值导致足端冲到极限位。 */
-    step_length_m = traj_clampf(step_length_m, -TRAJ_MAX_STEP_LENGTH_M, TRAJ_MAX_STEP_LENGTH_M);
+    Trajectory_ClampPlanarStep(&step_x_m, &step_y_m);
     swing_height_m = traj_clampf(swing_height_m, 0.0f, TRAJ_MAX_SWING_HEIGHT_M);
 
     s = traj_clampf(local_phase, 0.0f, 1.0f);
     prog = Trajectory_CycloidProgress(s);
     lift = Trajectory_CycloidLift(s);
-    half_step = 0.5f * step_length_m;
-    x_rear = nominal->x_m - half_step;
-    x_front = nominal->x_m + half_step;
-
-    /* 固定围绕 nominal 做周期运动 */
-    out.y_m = nominal->y_m;
+    half_step_x = 0.5f * step_x_m;
+    half_step_y = 0.5f * step_y_m;
+    x_rear = nominal->x_m - half_step_x;
+    x_front = nominal->x_m + half_step_x;
+    y_rear = nominal->y_m - half_step_y;
+    y_front = nominal->y_m + half_step_y;
 
     if (leg_state == STEP_LEG_SWING)
     {
-        /* 摆动相：x 用摆线从后到前，z 用摆线包络抬脚。 */
-        out.x_m = x_rear + step_length_m * prog;
+        /* 摆动相：x/y 同步用摆线从后到前，z 用摆线包络抬脚。 */
+        out.x_m = x_rear + step_x_m * prog;
+        out.y_m = y_rear + step_y_m * prog;
         out.z_m = nominal->z_m + swing_height_m * lift;
     }
     else
     {
-        /* 支撑相：x 用摆线从前回到后，z 贴地。 */
-        out.x_m = x_front - step_length_m * prog;
+        /* 支撑相：x/y 同步用摆线从前回到后，z 贴地。 */
+        out.x_m = x_front - step_x_m * prog;
+        out.y_m = y_front - step_y_m * prog;
         out.z_m = nominal->z_m;
     }
 
@@ -191,6 +229,11 @@ void Trajectory_Update(DiagonalCycloidGait *gait,
         StepLegState leg_state;
         float local_phase;
         float leg_swing_height_m;
+        float leg_step_x_m;
+        float leg_step_y_m;
+        float leg_rx_m;
+        float leg_ry_m;
+        float inv_freq_hz;
         GaitFootPosM foot_target;
 
         Trajectory_GetLegPhase(leg_idx,
@@ -205,10 +248,31 @@ void Trajectory_Update(DiagonalCycloidGait *gait,
             leg_swing_height_m += gait->front_swing_height_bias_m;
         }
 
+        /* 组合步幅：
+         * - 基础前后步幅来自 step_length_m（兼容 WALK/CRAWL）；
+         * - FREE_MOVE 可通过 body_vx/body_vy/body_w 叠加二维平移与自转。
+         */
+        leg_step_x_m = gait->step_length_m;
+        leg_step_y_m = 0.0f;
+
+        if ((gait->freq_hz > TRAJ_MIN_EFFECTIVE_FREQ_HZ) || (gait->freq_hz < -TRAJ_MIN_EFFECTIVE_FREQ_HZ))
+        {
+            inv_freq_hz = 1.0f / gait->freq_hz;
+            leg_rx_m = gait->nominal[leg_idx].x_m;
+            leg_ry_m = gait->nominal[leg_idx].y_m;
+
+            /* step = body velocity at leg point / freq */
+            leg_step_x_m += (gait->body_vx_m_s - gait->body_w_rad_s * leg_ry_m) * inv_freq_hz;
+            leg_step_y_m += (gait->body_vy_m_s + gait->body_w_rad_s * leg_rx_m) * inv_freq_hz;
+        }
+
+        Trajectory_ClampPlanarStep(&leg_step_x_m, &leg_step_y_m);
+
         foot_target = Trajectory_GenerateNominalCenteredFoot(&gait->nominal[leg_idx],
                                                              leg_state,
                                                              local_phase,
-                                                             gait->step_length_m,
+                                                             leg_step_x_m,
+                                                             leg_step_y_m,
                                                              leg_swing_height_m);
         Gait_SetLegFootTargetM(leg_idx,
                                foot_target.x_m,
@@ -222,6 +286,9 @@ void Trajectory_InitDefault(DiagonalCycloidGait *gait)
     gait->freq_hz = 1.2f;
     gait->step_length_m = 0.10f; /* 默认原地踏步 */
     gait->swing_height_m = 0.07f;
+    gait->body_vx_m_s = 0.0f;
+    gait->body_vy_m_s = 0.0f;
+    gait->body_w_rad_s = 0.0f;
     /* 让前腿在摆动相默认抬得比后腿更高一些。 */
     gait->front_swing_height_bias_m = TRAJ_DEFAULT_FRONT_SWING_BIAS_M;
 
@@ -318,6 +385,27 @@ void Trajectory_SetSwingHeight(DiagonalCycloidGait *gait, float swing_height_m)
     gait->swing_height_m = traj_clampf(swing_height_m,
                                        0.0f,
                                        TRAJ_MAX_SWING_HEIGHT_M);
+}
+
+void Trajectory_SetBodyVelocity(DiagonalCycloidGait *gait,
+                                float body_vx_m_s,
+                                float body_vy_m_s,
+                                float body_w_rad_s)
+{
+    if (gait == 0)
+    {
+        return;
+    }
+
+    gait->body_vx_m_s = traj_clampf(body_vx_m_s,
+                                    -TRAJ_MAX_BODY_VX_M_S,
+                                    TRAJ_MAX_BODY_VX_M_S);
+    gait->body_vy_m_s = traj_clampf(body_vy_m_s,
+                                    -TRAJ_MAX_BODY_VY_M_S,
+                                    TRAJ_MAX_BODY_VY_M_S);
+    gait->body_w_rad_s = traj_clampf(body_w_rad_s,
+                                     -TRAJ_MAX_BODY_W_RAD_S,
+                                     TRAJ_MAX_BODY_W_RAD_S);
 }
 
 void Trajectory_SetFrontSwingHeightBias(DiagonalCycloidGait *gait, float front_bias_m)

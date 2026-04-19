@@ -60,6 +60,19 @@ typedef struct
     /* 摆动相基础抬脚高度，单位 m */
     float swing_height_m;
 
+    /* 机体坐标系速度命令：
+     * - body_vx_m_s：前后速度（+x 向狗头）
+     * - body_vy_m_s：左右速度（+y 向狗左侧）
+     * - body_w_rad_s：绕 z 轴角速度（+为逆时针）
+     *
+     * 说明：
+     * - WALK/CRAWL 模式下可设为 0，保持传统前后踏步。
+     * - FREE_MOVE 模式下可由遥控摇杆实时写入，实现全向 + 自转。
+     */
+    float body_vx_m_s;
+    float body_vy_m_s;
+    float body_w_rad_s;
+
     /* 仅前腿(FL/FR)在摆动相额外增加的抬脚偏置，单位 m。
      * 实际前腿摆动高度 = swing_height_m + front_swing_height_bias_m。
      * 后腿(HL/HR)仍使用 swing_height_m。
@@ -104,6 +117,12 @@ void Trajectory_SetStepLength(DiagonalCycloidGait *gait, float step_length_m);
 
 /* 设置摆动相抬脚高度 */
 void Trajectory_SetSwingHeight(DiagonalCycloidGait *gait, float swing_height_m);
+
+/* 设置机体速度命令（用于全向自由运动） */
+void Trajectory_SetBodyVelocity(DiagonalCycloidGait *gait,
+                                float body_vx_m_s,
+                                float body_vy_m_s,
+                                float body_w_rad_s);
 
 /* 设置“前腿相对后腿”的摆动抬脚偏置（只在前腿摆动相生效） */
 void Trajectory_SetFrontSwingHeightBias(DiagonalCycloidGait *gait, float front_bias_m);

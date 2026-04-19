@@ -173,4 +173,10 @@ void send_data_all(Leg *leg);
 void set_cmd_pos_by_index(uint8_t cmd_idx, float pos);
 void cmd_init_2(void);
 
+/* 启动/重启指定 485 口（按腿索引）的 DMA 接收。 */
+void MotorBus_Restart(uint8_t leg_idx);
+
+/* 处理指定 485 口收到的一帧数据，并按电机 ID 分发到对应电机反馈结构体。 */
+void MotorBus_Process(uint8_t leg_idx, uint16_t size);
+
 #endif

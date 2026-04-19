@@ -13,12 +13,14 @@
  * - STAND：站立/定点姿态
  * - WALK：行走/步态轨迹
  * - CRAWL：匍匐/低姿态步态（与 WALK 相同，但四足 z 统一上移）
+ * - FREE_MOVE：自由运动（遥控 Vx/Vy/Vw 全向 + 自转）
  */
 typedef enum
 {
     ROBOT_MODE_STAND = 0U,//正常站立
     ROBOT_MODE_WALK = 1U,//正常行走
-    ROBOT_MODE_CRAWL = 2U//匍匐行走
+    ROBOT_MODE_CRAWL = 2U,//匍匐行走
+    ROBOT_MODE_FREE_MOVE = 3U//自由运动
 } RobotControlMode;
 
 /*
@@ -47,7 +49,7 @@ void App_vofa_Send(void);
 
 /*
  * 设置控制模式：
- * - 仅通过该接口切换 STAND/WALK/CRAWL，避免外置标志位导致逻辑分散。
+ * - 仅通过该接口切换 STAND/WALK/CRAWL/FREE_MOVE，避免外置标志位导致逻辑分散。
  */
 void App_SetControlMode(RobotControlMode mode);
 
@@ -116,10 +118,11 @@ float App_target_relative_to_absolute(float pos_rel,
  *
  * 模式策略：
  * - STAND：启用电机插值平滑（适合“直接给终点角”的站立动作）
- * - WALK：关闭电机插值，直接跟踪 IK 输出（避免行走链路双层平滑）
+ * - WALK/CRAWL/FREE_MOVE：关闭电机插值，直接跟踪 IK 输出（避免行走链路双层平滑）
  */
 void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
                              Leg leg[ROBOT_LEG_NUM]);
 //根据电机当前角度来计算当前足端位置
 void App_UpdateCurrentFootPosFromMotor(Leg leg[ROBOT_LEG_NUM]);
+void App_Robot_Send_Loop(void);
 #endif

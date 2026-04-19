@@ -143,7 +143,7 @@ void motor(void const * argument)
   {
     //足端单位是m
     App_Robot_Loop1ms();
-    osDelay(3);
+    osDelay(1);
   }
   /* USER CODE END motor */
 }
@@ -161,8 +161,9 @@ void vofa(void const * argument)
   /* Infinite loop */
   for(;;)
   {
+    //App_Robot_Send_Loop();
     App_vofa_Send();
-    osDelay(1);
+    osDelay(2);
   }
   /* USER CODE END vofa */
 }
