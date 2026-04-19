@@ -3,9 +3,14 @@
 
 #define TRAJ_MAX_STEP_LENGTH_M 0.100f
 #define TRAJ_MAX_SWING_HEIGHT_M 0.200f
-#define TRAJ_SWING_PHASE_RATIO 0.40f
+/* 前腿摆动高度偏置的上限保护，避免叠加后抬脚过大。 */
+#define TRAJ_MAX_FRONT_SWING_BIAS_M 0.100f
+/* 默认前腿在摆动相比后腿额外多抬 1.5cm。 */
+#define TRAJ_DEFAULT_FRONT_SWING_BIAS_M 0.015f
+#define TRAJ_SWING_PHASE_RATIO 0.50f
 #define TRAJ_STANCE_PHASE_RATIO (1.0f - TRAJ_SWING_PHASE_RATIO)
 #define TRAJ_DIAGONAL_PHASE_OFFSET 0.50f
+#define TRAJ_TWO_PI (2.0f * GAIT_PI)
 
 static float traj_clampf(float x, float min_val, float max_val)
 {
@@ -40,27 +45,23 @@ static void Trajectory_RuntimeInit(FootTrajRuntime *rt)
     }
 }
 
-/* 五次多项式混合函数（minimum-jerk）：
- * s=0 -> 0, s=1 -> 1，且两端速度/加速度都为 0。
- * 用它做 x 方向插值，轨迹会比线性过渡更平滑。
+/* 摆线进度函数：
+ * p(s) = s - sin(2*pi*s)/(2*pi), s in [0,1]
+ * p(0)=0, p(1)=1，且端点速度为 0。
+ * 用它做 x 方向的相位映射，可避免端点速度突变。
  */
-static float Trajectory_Poly5Blend(float s)
+static float Trajectory_CycloidProgress(float s)
 {
-    float s2 = s * s;
-    float s3 = s2 * s;
-    float s4 = s3 * s;
-    float s5 = s4 * s;
-    return 10.0f * s3 - 15.0f * s4 + 6.0f * s5;
+    return s - sinf(TRAJ_TWO_PI * s) / TRAJ_TWO_PI;
 }
 
-/* 四次多项式抬脚包络：
- * 16*s^2*(1-s)^2 在 s=0 和 s=1 时为 0，在 s=0.5 时为 1。
- * 这个函数专门用来生成“中间高、两端低”的 z 抬脚形状。
+/* 摆线抬脚包络：
+ * l(s) = 0.5 * (1 - cos(2*pi*s)), s in [0,1]
+ * l(0)=0, l(1)=0, l(0.5)=1，形成中间抬高、两端贴地。
  */
-static float Trajectory_Poly4Lift(float s)
+static float Trajectory_CycloidLift(float s)
 {
-    float one_minus_s = 1.0f - s;
-    return 16.0f * s * s * one_minus_s * one_minus_s;
+    return 0.5f * (1.0f - cosf(TRAJ_TWO_PI * s));
 }
 
 /* 步态调度层：
@@ -116,26 +117,19 @@ static void Trajectory_GetLegPhase(uint8_t leg_idx,
 
     *local_phase = traj_clampf(*local_phase, 0.0f, 1.0f);
 }
-GaitFootPosM out;
-float s;
-float blend;
-float lift;
-float half_step;
-float x_rear;
-float x_front;
 static GaitFootPosM Trajectory_GenerateNominalCenteredFoot(const GaitFootPosM *nominal,
                                                            StepLegState leg_state,
                                                            float local_phase,
                                                            float step_length_m,
                                                            float swing_height_m)
 {
-    // GaitFootPosM out;
-    // float s;
-    // float blend;
-    // float lift;
-    // float half_step;
-    // float x_rear;
-    // float x_front;
+    GaitFootPosM out;
+    float s;
+    float prog;
+    float lift;
+    float half_step;
+    float x_rear;
+    float x_front;
 
     if (nominal == 0)
     {
@@ -150,8 +144,8 @@ static GaitFootPosM Trajectory_GenerateNominalCenteredFoot(const GaitFootPosM *n
     swing_height_m = traj_clampf(swing_height_m, 0.0f, TRAJ_MAX_SWING_HEIGHT_M);
 
     s = traj_clampf(local_phase, 0.0f, 1.0f);
-    blend = Trajectory_Poly5Blend(s);
-    lift = Trajectory_Poly4Lift(s);
+    prog = Trajectory_CycloidProgress(s);
+    lift = Trajectory_CycloidLift(s);
     half_step = 0.5f * step_length_m;
     x_rear = nominal->x_m - half_step;
     x_front = nominal->x_m + half_step;
@@ -161,19 +155,15 @@ static GaitFootPosM Trajectory_GenerateNominalCenteredFoot(const GaitFootPosM *n
 
     if (leg_state == STEP_LEG_SWING)
     {
-        /* 摆动相：x 从后向前走五次多项式，z 用四次多项式抬脚。 */
-        // out.x_m = x_rear + step_length_m * blend;
-        // out.z_m = nominal->z_m + swing_height_m * lift;
-        out.x_m = nominal->x_m + 0.4f*step_length_m/2.0f;
-        out.z_m = nominal->z_m + swing_height_m;
+        /* 摆动相：x 用摆线从后到前，z 用摆线包络抬脚。 */
+        out.x_m = x_rear + step_length_m * prog;
+        out.z_m = nominal->z_m + swing_height_m * lift;
     }
     else
     {
-        /* 支撑相：x 从前向后做五次多项式回扫，z 贴地。 */
-        //out.x_m = x_front - step_length_m * blend;
+        /* 支撑相：x 用摆线从前回到后，z 贴地。 */
+        out.x_m = x_front - step_length_m * prog;
         out.z_m = nominal->z_m;
-        out.x_m = nominal->x_m - 0.6f*step_length_m/2.0f;
-        // out.z_m = nominal->z_m ;
     }
 
     return out;
@@ -200,17 +190,26 @@ void Trajectory_Update(DiagonalCycloidGait *gait,
     {
         StepLegState leg_state;
         float local_phase;
+        float leg_swing_height_m;
         GaitFootPosM foot_target;
 
         Trajectory_GetLegPhase(leg_idx,
                                gait->gait_phase,
                                &leg_state,
                                &local_phase);
+
+        /* 仅在摆动相给前腿加额外抬脚偏置，后腿维持基础抬脚高度。 */
+        leg_swing_height_m = gait->swing_height_m;
+        if ((leg_state == STEP_LEG_SWING) && ((leg_idx == LEG_FL) || (leg_idx == LEG_FR)))
+        {
+            leg_swing_height_m += gait->front_swing_height_bias_m;
+        }
+
         foot_target = Trajectory_GenerateNominalCenteredFoot(&gait->nominal[leg_idx],
                                                              leg_state,
                                                              local_phase,
                                                              gait->step_length_m,
-                                                             gait->swing_height_m);
+                                                             leg_swing_height_m);
         Gait_SetLegFootTargetM(leg_idx,
                                foot_target.x_m,
                                foot_target.y_m,
@@ -220,9 +219,11 @@ void Trajectory_Update(DiagonalCycloidGait *gait,
 void Trajectory_InitDefault(DiagonalCycloidGait *gait)
 {
     gait->gait_phase = 0.0f;
-    gait->freq_hz = 0.8f;
-    gait->step_length_m = 0.0f; /* 默认原地踏步 */
-    gait->swing_height_m = 0.030f;
+    gait->freq_hz = 1.2f;
+    gait->step_length_m = 0.10f; /* 默认原地踏步 */
+    gait->swing_height_m = 0.07f;
+    /* 让前腿在摆动相默认抬得比后腿更高一些。 */
+    gait->front_swing_height_bias_m = TRAJ_DEFAULT_FRONT_SWING_BIAS_M;
 
     gait->nominal[LEG_FL].x_m = -0.0638f;
     gait->nominal[LEG_FL].y_m = 0.0780f;
@@ -234,11 +235,11 @@ void Trajectory_InitDefault(DiagonalCycloidGait *gait)
 
     gait->nominal[LEG_HL].x_m = -0.0638f;
     gait->nominal[LEG_HL].y_m = 0.0780f;
-    gait->nominal[LEG_HL].z_m = -0.3330f;
+    gait->nominal[LEG_HL].z_m = -0.3230f;
 
     gait->nominal[LEG_HR].x_m = -0.0638f;
     gait->nominal[LEG_HR].y_m = -0.0780f;
-    gait->nominal[LEG_HR].z_m = -0.3330f;
+    gait->nominal[LEG_HR].z_m = -0.3230f;
 
     Trajectory_RuntimeInit(&gait->runtime);
 }
@@ -317,4 +318,22 @@ void Trajectory_SetSwingHeight(DiagonalCycloidGait *gait, float swing_height_m)
     gait->swing_height_m = traj_clampf(swing_height_m,
                                        0.0f,
                                        TRAJ_MAX_SWING_HEIGHT_M);
+}
+
+void Trajectory_SetFrontSwingHeightBias(DiagonalCycloidGait *gait, float front_bias_m)
+{
+    if (gait == 0)
+    {
+        return;
+    }
+
+    if (front_bias_m < 0.0f)
+    {
+        front_bias_m = 0.0f;
+    }
+
+    /* 该偏置只会在前腿(FL/FR)摆动相被叠加，支撑相与后腿不受影响。 */
+    gait->front_swing_height_bias_m = traj_clampf(front_bias_m,
+                                                   0.0f,
+                                                   TRAJ_MAX_FRONT_SWING_BIAS_M);
 }

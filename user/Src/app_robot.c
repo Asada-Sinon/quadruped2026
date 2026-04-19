@@ -6,6 +6,7 @@
 #include "vofa.h"
 #include <math.h>
 #include "trajectory.h"
+#include "HT10A.h"
 
 #define APP_INTERP_DT_MS 1.0f                            /* 每次调用插值函数时，默认推进 1ms 的相位。 */
 #define APP_INTERP_DT_MAX_MS 20.0f                       /* 实测 dt 的上限保护，防止调试停顿后一步跳太大。 */
@@ -14,16 +15,74 @@
 #define APP_INTERP_SPEED_RAD_PER_S 0.8f                  /* 依据角度差推算时长时使用的期望角速度(rad/s)。 */
 #define APP_INTERP_TARGET_EPS 1.0e-4f                    /* 目标变化阈值，小于该值视为同一目标。 */
 #define APP_MOTOR_COUNT (ROBOT_LEG_NUM * MOTORS_PER_LEG) /* 4 条腿 x 每腿 3 个电机 = 12。 */
+#define APP_DEFAULT_STAND_X_M (-0.0638f)
+#define APP_DEFAULT_STAND_Y_M (0.0780f)
+#define APP_DEFAULT_STAND_Z_M (-0.3230f)
+#define APP_DEFAULT_WALK_FREQ_HZ (1.2f)
+#define APP_DEFAULT_WALK_SWING_HEIGHT_M (0.07f)
+#define APP_DEFAULT_WALK_STEP_LENGTH_M (0.10f)
+/* 匍匐模式相对 WALK 的固定 z 偏移：四足统一上移 0.1m。 */
+#define APP_CRAWL_Z_OFFSET_M (0.10f)
+
+typedef struct
+{
+    /* 当前控制模式，只允许通过 App_SetControlMode 切换。 */
+    RobotControlMode mode;
+    /* 上一周期模式，用于检测状态切换并执行一次性 entry 动作。 */
+    RobotControlMode last_mode;
+    /* 四条腿各自的站立 x 目标，下标顺序: FL, FR, HL, HR。 */
+    float stand_x_m_by_leg[ROBOT_LEG_NUM];
+    /* 四条腿各自的站立 y 目标，下标顺序: FL, FR, HL, HR。 */
+    float stand_y_m_by_leg[ROBOT_LEG_NUM];
+    /* 四条腿各自的站立 z 目标，下标顺序: FL, FR, HL, HR。 */
+    float stand_z_m_by_leg[ROBOT_LEG_NUM];
+    /* 行走模式轨迹参数。 */
+    float walk_freq_hz;
+    float walk_swing_height_m;
+    float walk_step_length_m;
+
+    /* WALK 模式的电机参数初始化只做一次，避免每周期重复发初始化命令。 */
+    uint8_t walk_cmd_inited;
+} AppControlContext;
 
 static DiagonalCycloidGait g_gait;
+/* 应用层统一控制上下文，替代分散的全局标志位。 */
+AppControlContext g_app_ctrl =
+    {
+        ROBOT_MODE_STAND,
+        ROBOT_MODE_STAND,
+        {APP_DEFAULT_STAND_X_M,
+         APP_DEFAULT_STAND_X_M,
+         APP_DEFAULT_STAND_X_M,
+         APP_DEFAULT_STAND_X_M},
+        {APP_DEFAULT_STAND_Y_M,
+         -APP_DEFAULT_STAND_Y_M,
+         APP_DEFAULT_STAND_Y_M,
+         -APP_DEFAULT_STAND_Y_M},
+        {APP_DEFAULT_STAND_Z_M,
+         APP_DEFAULT_STAND_Z_M,
+         APP_DEFAULT_STAND_Z_M+0.005f, // 后腿相对前腿的 z 偏置，默认多降低 1cm，避免后腿抬得过高不稳
+         APP_DEFAULT_STAND_Z_M+0.005f},
+        APP_DEFAULT_WALK_FREQ_HZ,
+        APP_DEFAULT_WALK_SWING_HEIGHT_M,
+        APP_DEFAULT_WALK_STEP_LENGTH_M,
+        0U};
 // 这个是电机输出轴的目标角度
 float Target_Angle[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
-/* 保存每个电机本周期算出的平滑目标角，便于调试和可视化。 */
-static float g_smoothed_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
 /* 当前正在计算第几个电机（0~11），供单电机插值函数选择对应状态槽。 */
 static uint8_t g_interp_ctx_idx = 0U;
 /* 本次控制循环测得的真实 dt(ms)，供 12 个电机共享同一时间步长。 */
 static float g_interp_dt_ms = APP_INTERP_DT_MS;
+/* 每个电机独立的插值起点。 */
+static float g_interp_start_angle[APP_MOTOR_COUNT] = {0};
+/* 每个电机独立的插值终点（上次确认过的目标）。 */
+static float g_interp_end_angle[APP_MOTOR_COUNT] = {0};
+/* 每个电机当前插值已推进时间。 */
+static float g_interp_elapsed_ms[APP_MOTOR_COUNT] = {0};
+/* 每个电机本段插值总时长。 */
+static float g_interp_duration_ms[APP_MOTOR_COUNT] = {0};
+/* 每个电机插值状态是否已初始化。 */
+static uint8_t g_interp_inited[APP_MOTOR_COUNT] = {0};
 // 物理世界中固定的上电位置并非0位，而是有一个偏置的，这个函数就是把这个偏置加上去，得到一个更符合机械定义的角度值，方便上层算法使用。
 static float App_Get_Model_Joint_Angle(uint8_t leg_idx,
                                        uint8_t motor_idx,
@@ -84,6 +143,206 @@ static float app_get_real_dt_ms(void)
     /* 对异常大 dt 做上限保护，避免一次性插值跳跃过大。 */
     return app_clampf((float)diff_tick, 1.0f, APP_INTERP_DT_MAX_MS);
 }
+
+static uint8_t app_is_valid_mode(RobotControlMode mode)
+{
+    if ((mode == ROBOT_MODE_STAND) ||
+        (mode == ROBOT_MODE_WALK) ||
+        (mode == ROBOT_MODE_CRAWL))
+    {
+        return 1U;
+    }
+    return 0U;
+}
+
+/* 统一重置 12 路插值内部状态，避免模式切换后沿用旧插值段造成突变。 */
+static void App_ResetAllInterpolationState(void)
+{
+    uint8_t idx;
+    for (idx = 0U; idx < APP_MOTOR_COUNT; idx++)
+    {
+        g_interp_start_angle[idx] = 0.0f;
+        g_interp_end_angle[idx] = 0.0f;
+        g_interp_elapsed_ms[idx] = 0.0f;
+        g_interp_duration_ms[idx] = APP_INTERP_MIN_DURATION_MS;
+        g_interp_inited[idx] = 0U;
+    }
+}
+
+/*
+ * 把步态名义点同步到当前站立位姿：
+ * 这样从 STAND 切到 WALK 时，轨迹中心不再使用 trajectory.c 里的固定默认值，
+ * 而是直接以各腿 stand_x/y/z 数组为基准，
+ * 避免切换瞬间出现位置/高度突变。
+ */
+static void App_SyncWalkNominalFromStandPose(void)
+{
+    Trajectory_SetNominalFoot(&g_gait,
+                              LEG_FL,
+                              g_app_ctrl.stand_x_m_by_leg[LEG_FL],
+                              g_app_ctrl.stand_y_m_by_leg[LEG_FL],
+                              g_app_ctrl.stand_z_m_by_leg[LEG_FL]);
+    Trajectory_SetNominalFoot(&g_gait,
+                              LEG_FR,
+                              g_app_ctrl.stand_x_m_by_leg[LEG_FR],
+                              g_app_ctrl.stand_y_m_by_leg[LEG_FR],
+                              g_app_ctrl.stand_z_m_by_leg[LEG_FR]);
+    Trajectory_SetNominalFoot(&g_gait,
+                              LEG_HL,
+                              g_app_ctrl.stand_x_m_by_leg[LEG_HL],
+                              g_app_ctrl.stand_y_m_by_leg[LEG_HL],
+                              g_app_ctrl.stand_z_m_by_leg[LEG_HL]); // 后腿相对前腿的 z 偏置，默认多降低 1cm，避免后腿抬得过高不稳
+    Trajectory_SetNominalFoot(&g_gait,
+                              LEG_HR,
+                              g_app_ctrl.stand_x_m_by_leg[LEG_HR],
+                              g_app_ctrl.stand_y_m_by_leg[LEG_HR],
+                              g_app_ctrl.stand_z_m_by_leg[LEG_HR]); // 后腿相对前腿的 z 偏置，默认多降低 1cm，避免后腿抬得过高不稳
+}
+
+/* 状态切换入口动作：只做一次的初始化/收尾放在这里，避免散落到主循环。 */
+static void App_HandleModeEntry(RobotControlMode mode)
+{
+    if ((mode == ROBOT_MODE_WALK) || (mode == ROBOT_MODE_CRAWL))
+    {
+        /* 进入 WALK/CRAWL 前先把轨迹中心对齐到当前 STAND 位姿。 */
+        App_SyncWalkNominalFromStandPose();
+        /* 行走相关模式首次进入时设置电机参数，后续不重复发。 */
+        if (g_app_ctrl.walk_cmd_inited == 0U)
+        {
+            cmd_init_2();
+            g_app_ctrl.walk_cmd_inited = 1U;
+        }
+        return;
+    }
+
+    if (mode == ROBOT_MODE_STAND)
+    {
+        /* 切回站立时重置步态相位，保证下次进入 WALK 从干净相位开始。 */
+        Trajectory_Reset(&g_gait);
+        /* 站立模式会再次启用电机插值，先清空插值状态，下一拍从当前反馈角重起。 */
+        App_ResetAllInterpolationState();
+    }
+}
+
+/* 站立模式：x/y/z 全部使用按腿独立数组。 */
+static void App_UpdateStandFootTarget(void)
+{
+    Gait_SetLegFootTargetM(LEG_FL,
+                           g_app_ctrl.stand_x_m_by_leg[LEG_FL],
+                           g_app_ctrl.stand_y_m_by_leg[LEG_FL],
+                           g_app_ctrl.stand_z_m_by_leg[LEG_FL]);
+    Gait_SetLegFootTargetM(LEG_HL,
+                           g_app_ctrl.stand_x_m_by_leg[LEG_HL],
+                           g_app_ctrl.stand_y_m_by_leg[LEG_HL],
+                           g_app_ctrl.stand_z_m_by_leg[LEG_HL]);
+    Gait_SetLegFootTargetM(LEG_FR,
+                           g_app_ctrl.stand_x_m_by_leg[LEG_FR],
+                           g_app_ctrl.stand_y_m_by_leg[LEG_FR],
+                           g_app_ctrl.stand_z_m_by_leg[LEG_FR]);
+    Gait_SetLegFootTargetM(LEG_HR,
+                           g_app_ctrl.stand_x_m_by_leg[LEG_HR],
+                           g_app_ctrl.stand_y_m_by_leg[LEG_HR],
+                           g_app_ctrl.stand_z_m_by_leg[LEG_HR]);
+}
+
+/* 行走模式：参数写入轨迹器后推进一步，生成四腿足端目标。 */
+static void App_UpdateWalkFootTarget(float dt_s)
+{
+    Trajectory_SetStepLength(&g_gait, g_app_ctrl.walk_step_length_m);
+    Trajectory_SetFrequency(&g_gait, g_app_ctrl.walk_freq_hz);
+    Trajectory_SetSwingHeight(&g_gait, g_app_ctrl.walk_swing_height_m);
+    Trajectory_Update(&g_gait, dt_s);
+}
+
+/* 匍匐模式：
+ * 1) 先完整复用 WALK 轨迹生成（保证时序/步长/抬脚等完全一致）；
+ * 2) 再把四条腿的 z 目标统一加固定偏置 0.1m。
+ */
+static void App_UpdateCrawlFootTarget(float dt_s)
+{
+    uint8_t leg_idx;
+
+    App_UpdateWalkFootTarget(dt_s);
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        Gait_SetLegFootTargetM(leg_idx,
+                               g_foot_target_m[leg_idx].x_m,
+                               g_foot_target_m[leg_idx].y_m,
+                               g_foot_target_m[leg_idx].z_m + APP_CRAWL_Z_OFFSET_M);
+    }
+}
+// 修改模式
+void App_SetControlMode(RobotControlMode mode)
+{
+    if (app_is_valid_mode(mode) == 0U)
+    {
+        return;
+    }
+    g_app_ctrl.mode = mode;
+}
+
+RobotControlMode App_GetControlMode(void)
+{
+    return g_app_ctrl.mode;
+}
+// 行走参数
+void App_SetWalkParams(float freq_hz,
+                       float step_length_m,
+                       float swing_height_m)
+{
+    if (freq_hz < 0.0f)
+    {
+        freq_hz = 0.0f;
+    }
+    if (swing_height_m < 0.0f)
+    {
+        swing_height_m = 0.0f;
+    }
+
+    g_app_ctrl.walk_freq_hz = freq_hz;
+    g_app_ctrl.walk_step_length_m = step_length_m;
+    g_app_ctrl.walk_swing_height_m = swing_height_m;
+}
+// 站立足端位置
+void App_SetStandPose(const float stand_x_m_by_leg[ROBOT_LEG_NUM],
+                      const float stand_y_m_by_leg[ROBOT_LEG_NUM],
+                      const float stand_z_m_by_leg[ROBOT_LEG_NUM])
+{
+    uint8_t leg_idx;
+
+    if (stand_x_m_by_leg != 0)
+    {
+        for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+        {
+            g_app_ctrl.stand_x_m_by_leg[leg_idx] = stand_x_m_by_leg[leg_idx];
+        }
+    }
+    if (stand_y_m_by_leg != 0)
+    {
+        for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+        {
+            g_app_ctrl.stand_y_m_by_leg[leg_idx] = stand_y_m_by_leg[leg_idx];
+        }
+    }
+    if (stand_z_m_by_leg != 0)
+    {
+        for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+        {
+            g_app_ctrl.stand_z_m_by_leg[leg_idx] = stand_z_m_by_leg[leg_idx];
+        }
+    }
+
+    /*
+     * 仅在 STAND 模式下立即同步 nominal；
+     * 若当前正在 WALK/CRAWL，则把新参数缓存起来，等下次进入该模式前再同步，避免运行中跳变。
+     */
+    if (g_app_ctrl.mode == ROBOT_MODE_STAND)
+    {
+        App_SyncWalkNominalFromStandPose();
+    }
+}
+
 /*
  * 业务初始化：
  * 当前只需要初始化电机总线层。
@@ -97,50 +356,63 @@ void App_Robot_Init(void)
     send_data_all(legs);
     cmd_single_test_init();
     Trajectory_InitDefault(&g_gait);
+    /* 启动时也统一让 walk nominal 以 stand 位姿为基准。 */
+    App_SyncWalkNominalFromStandPose();
+    App_ResetAllInterpolationState();
+    /* 默认从 STAND 启动，last_mode 同步后可避免启动瞬间误判“模式切换”。 */
+    g_app_ctrl.last_mode = g_app_ctrl.mode;
     VOFA_JF_DMA_Init(&hvofa, &huart6);
+    Teaching_Pendant_Restart();
 }
-
+float bios = 0.015f; // 前腿相对后腿的额外抬高，默认多抬高 1.5cm，避免前腿摆动时过低不稳
 /*
  * 业务 1ms 主循环：
  * 1) 读取当前系统 tick；
- * 2) 刷新控制目标（目前是固定站立角）；
+ * 2) 按 STAND/WALK/CRAWL 状态机刷新足端目标；
  * 3) 推进一次通信状态机。
  *
  * 注意：这里不做阻塞延时，实时性由外层 1ms 调度保障。
  */
-float test_position[3] = {-0.0638, 0.078, -0.3230};
-int test_position_idx = 0;
-float freq = 1.6f;      // Hz
-float highteee = 0.05f; // m
-float lentheee = 0.05f;
-float paradm = 0.0f;
 void App_Robot_Loop1ms(void)
 {
+    Trajectory_SetFrontSwingHeightBias(&g_gait, bios); // 前腿相对后腿的额外抬高，默认多抬高 1.5cm，避免前腿摆动时过低不稳
     /* 计算本周期真实 dt，后续 12 路插值都使用这个时间步长。 */
     g_interp_dt_ms = app_get_real_dt_ms();
     float dt_s = g_interp_dt_ms / 1000.0f;
-    if (test_position_idx == 0)
+
+    /* 模式切换检测：只在切换边沿执行 entry 动作，避免每拍重复做初始化。 */
+    if (g_app_ctrl.mode != g_app_ctrl.last_mode)
     {
-        Gait_SetLegFootTargetM(0, test_position[0], test_position[1], test_position[2]);
-        Gait_SetLegFootTargetM(2, test_position[0], test_position[1], test_position[2] - 0.05f);
-        Gait_SetLegFootTargetM(1, test_position[0], -test_position[1], test_position[2]);
-        Gait_SetLegFootTargetM(3, test_position[0], -test_position[1], test_position[2] - 0.05f);
+        App_HandleModeEntry(g_app_ctrl.mode);
+        g_app_ctrl.last_mode = g_app_ctrl.mode;
     }
-    else
+
+    switch (g_app_ctrl.mode)
     {
-        if (paradm == 0.0f)
-        {
-            cmd_init_2();
-            paradm = 1.0f;
-        }
-        Trajectory_SetStepLength(&g_gait, lentheee);
-        Trajectory_SetFrequency(&g_gait, freq);
-        Trajectory_SetSwingHeight(&g_gait, highteee);
-        Trajectory_Update(&g_gait, dt_s);
+    case ROBOT_MODE_STAND:
+        App_UpdateStandFootTarget();
+        break;
+
+    case ROBOT_MODE_WALK:
+        App_UpdateWalkFootTarget(dt_s);
+        break;
+
+    case ROBOT_MODE_CRAWL:
+        App_UpdateCrawlFootTarget(dt_s);
+        break;
+
+    default:
+        /* 非法模式回退到 STAND，保证控制链路可预期。 */
+        g_app_ctrl.mode = ROBOT_MODE_STAND;
+        App_HandleModeEntry(g_app_ctrl.mode);
+        g_app_ctrl.last_mode = g_app_ctrl.mode;
+        App_UpdateStandFootTarget();
+        break;
     }
+
     // 四个腿根据足端位置，逆运动学设置关节位置
     Gait_UpdateTargetAngleFromFootTarget(Target_Angle);
-    // 根据目标角度算平滑值，算完后面发就是这个值
+    // 站立：电机插值平滑；行走/匍匐：直接跟踪 IK 输出，避免“轨迹 + 电机”双层平滑带来的滞后
     App_all_motor_claculate(Target_Angle, legs);
     /* 再统一下发本周期已经平滑后的 12 路位置命令。 */
     send_data_all(legs);
@@ -160,17 +432,6 @@ void App_vofa_Send(void)
 // 单电机平滑计算
 float App_motor_angle_calculate(float target_angle, float pos_rel)
 {
-    /* 每个电机独立的插值起点，避免 12 路电机串状态。 */
-    static float start_angle[APP_MOTOR_COUNT] = {0};
-    /* 每个电机独立的插值终点（上一次确认过的目标）。 */
-    static float end_angle[APP_MOTOR_COUNT] = {0};
-    /* 每个电机当前已经走了多少毫秒。 */
-    static float elapsed_ms[APP_MOTOR_COUNT] = {0};
-    /* 每个电机本段插值总时长（毫秒）。 */
-    static float duration_ms[APP_MOTOR_COUNT] = {APP_INTERP_MIN_DURATION_MS};
-    /* 每个电机是否做过首次初始化。 */
-    static uint8_t inited[APP_MOTOR_COUNT] = {0};
-
     /* 读取当前电机上下文编号（由批量函数在外层提前设置）。 */
     uint8_t idx = g_interp_ctx_idx;
 
@@ -187,56 +448,56 @@ float App_motor_angle_calculate(float target_angle, float pos_rel)
     float blend;
 
     /* 首次进入时：以当前反馈角作为起点，目标角作为终点。 */
-    if (inited[idx] == 0U)
+    if (g_interp_inited[idx] == 0U)
     {
         /* 把当前反馈角锁为起点，避免首次跳变。 */
-        start_angle[idx] = pos_rel;
+        g_interp_start_angle[idx] = pos_rel;
         /* 记录当前插值段终点。 */
-        end_angle[idx] = target_angle;
+        g_interp_end_angle[idx] = target_angle;
         /* 计算本段角度差。 */
-        delta = end_angle[idx] - start_angle[idx];
+        delta = g_interp_end_angle[idx] - g_interp_start_angle[idx];
         /* 按“角度差/期望速度”推导该段时长，并转成 ms。 */
-        duration_ms[idx] = fabsf(delta) / APP_INTERP_SPEED_RAD_PER_S * 1000.0f;
+        g_interp_duration_ms[idx] = fabsf(delta) / APP_INTERP_SPEED_RAD_PER_S * 1000.0f;
         /* 给时长上/下限，保证动作可控。 */
-        duration_ms[idx] = app_clampf(duration_ms[idx], APP_INTERP_MIN_DURATION_MS, APP_INTERP_MAX_DURATION_MS);
+        g_interp_duration_ms[idx] = app_clampf(g_interp_duration_ms[idx], APP_INTERP_MIN_DURATION_MS, APP_INTERP_MAX_DURATION_MS);
         /* 新段开始，已用时清零。 */
-        elapsed_ms[idx] = 0.0f;
+        g_interp_elapsed_ms[idx] = 0.0f;
         /* 标记该电机已初始化。 */
-        inited[idx] = 1U;
+        g_interp_inited[idx] = 1U;
     }
 
     /* 如果目标角明显变化，则从“当前反馈角”重新起一段新插值。 */
-    if (fabsf(target_angle - end_angle[idx]) > APP_INTERP_TARGET_EPS)
+    if (fabsf(target_angle - g_interp_end_angle[idx]) > APP_INTERP_TARGET_EPS)
     {
         /* 新目标来时，用实时反馈作为新起点最稳妥。 */
-        start_angle[idx] = pos_rel;
+        g_interp_start_angle[idx] = pos_rel;
         /* 更新插值段终点为新目标。 */
-        end_angle[idx] = target_angle;
+        g_interp_end_angle[idx] = target_angle;
         /* 重新计算该段角度差。 */
-        delta = end_angle[idx] - start_angle[idx];
+        delta = g_interp_end_angle[idx] - g_interp_start_angle[idx];
         /* 重新估算时长。 */
-        duration_ms[idx] = fabsf(delta) / APP_INTERP_SPEED_RAD_PER_S * 1000.0f;
+        g_interp_duration_ms[idx] = fabsf(delta) / APP_INTERP_SPEED_RAD_PER_S * 1000.0f;
         /* 仍然做时长裁剪，防止过快过慢。 */
-        duration_ms[idx] = app_clampf(duration_ms[idx], APP_INTERP_MIN_DURATION_MS, APP_INTERP_MAX_DURATION_MS);
+        g_interp_duration_ms[idx] = app_clampf(g_interp_duration_ms[idx], APP_INTERP_MIN_DURATION_MS, APP_INTERP_MAX_DURATION_MS);
         /* 新段从 0ms 开始计时。 */
-        elapsed_ms[idx] = 0.0f;
+        g_interp_elapsed_ms[idx] = 0.0f;
     }
 
     /* 仅在还没走到终点时推进时间。 */
-    if (elapsed_ms[idx] < duration_ms[idx])
+    if (g_interp_elapsed_ms[idx] < g_interp_duration_ms[idx])
     {
         /* 按本周期实测 dt 推进插值时间。 */
-        elapsed_ms[idx] += 2*g_interp_dt_ms;
+        g_interp_elapsed_ms[idx] += g_interp_dt_ms;
         /* 防止最后一步超过总时长。 */
-        if (elapsed_ms[idx] > duration_ms[idx])
+        if (g_interp_elapsed_ms[idx] > g_interp_duration_ms[idx])
         {
             /* 超了就钳位到终点时间。 */
-            elapsed_ms[idx] = duration_ms[idx];
+            g_interp_elapsed_ms[idx] = g_interp_duration_ms[idx];
         }
     }
 
     /* 把时间进度映射成 0~1 的归一化相位。 */
-    s = elapsed_ms[idx] / duration_ms[idx];
+    s = g_interp_elapsed_ms[idx] / g_interp_duration_ms[idx];
     /* 再做一次保险钳位。 */
     s = app_clampf(s, 0.0f, 1.0f);
 
@@ -248,7 +509,7 @@ float App_motor_angle_calculate(float target_angle, float pos_rel)
 
     /* 五次多项式 S 曲线：端点速度/加速度均为 0。 */
     blend = 10.0f * s3 - 15.0f * s4 + 6.0f * s5;
-    return start_angle[idx] + (end_angle[idx] - start_angle[idx]) * blend;
+    return g_interp_start_angle[idx] + (g_interp_end_angle[idx] - g_interp_start_angle[idx]) * blend;
 }
 // 相对角和绝对角转换
 float App_target_relative_to_absolute(float pos_rel,
@@ -287,20 +548,30 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
             /* 拿到当前电机对象，后续读取 PosRel 和写入 motor_s。 */
             M8010 *motor = &leg[leg_idx].motors_peer_leg[motor_idx];
             float current_model_angle;
+            float control_model_angle;
             float target_motor_rel;
             /* 当前电机最终要发送的绝对角。 */
             float target_abs;
-            g_interp_ctx_idx = cmd_idx;
 
             current_model_angle = App_Get_Model_Joint_Angle(leg_idx, motor_idx, motor);
-            /* 用当前电机目标角 + 当前电机反馈角，求本周期平滑角。 */
-            g_smoothed_angle[leg_idx][motor_idx] = App_motor_angle_calculate(target_angle[leg_idx][motor_idx],
-                                                                             current_model_angle);
+            if (g_app_ctrl.mode == ROBOT_MODE_STAND)
+            {
+                /* 站立模式保留关节插值：直接给终点角时，用五次曲线减少瞬时冲击。 */
+                g_interp_ctx_idx = cmd_idx;
+                control_model_angle = App_motor_angle_calculate(target_angle[leg_idx][motor_idx],
+                                                                current_model_angle);
+            }
+            else
+            {
+                /* 行走/匍匐模式关闭电机插值：轨迹层已经生成连续足端轨迹，这里直接跟踪 IK 输出。 */
+                control_model_angle = target_angle[leg_idx][motor_idx];
+            }
+
             /* 模型关节目标角 -> 电机相对角 */
             target_motor_rel =
                 App_Model_Joint_Angle_To_Motor_Rel(leg_idx,
                                                    motor_idx,
-                                                   g_smoothed_angle[leg_idx][motor_idx]);
+                                                   control_model_angle);
 
             /* 电机相对角 -> 电机绝对角命令 */
             target_abs = App_target_relative_to_absolute(motor->motor_r.PosRel,

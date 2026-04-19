@@ -33,6 +33,7 @@
 "m8010_test\m8010.o"
 "m8010_test\rx_callback.o"
 "m8010_test\vofa.o"
+"m8010_test\ht10a.o"
 "m8010_test\croutine.o"
 "m8010_test\event_groups.o"
 "m8010_test\list.o"

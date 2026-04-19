@@ -57,8 +57,14 @@ typedef struct
      */
     float step_length_m;
 
-    /* 摆动相抬脚高度，单位 m */
+    /* 摆动相基础抬脚高度，单位 m */
     float swing_height_m;
+
+    /* 仅前腿(FL/FR)在摆动相额外增加的抬脚偏置，单位 m。
+     * 实际前腿摆动高度 = swing_height_m + front_swing_height_bias_m。
+     * 后腿(HL/HR)仍使用 swing_height_m。
+     */
+    float front_swing_height_bias_m;
 
     /* 四条腿各自的名义落脚点（髋坐标系） */
     GaitFootPosM nominal[ROBOT_LEG_NUM];
@@ -71,7 +77,8 @@ typedef struct
  * - gait_phase = 0
  * - freq_hz = 0.8
  * - step_length_m = 0 （默认原地踏步）
- * - swing_height_m = 0.03
+ * - swing_height_m = 0.07
+ * - front_swing_height_bias_m = 0.015
  * - 默认名义点按你现在代码中的值写入
  */
 void Trajectory_InitDefault(DiagonalCycloidGait *gait);
@@ -97,6 +104,9 @@ void Trajectory_SetStepLength(DiagonalCycloidGait *gait, float step_length_m);
 
 /* 设置摆动相抬脚高度 */
 void Trajectory_SetSwingHeight(DiagonalCycloidGait *gait, float swing_height_m);
+
+/* 设置“前腿相对后腿”的摆动抬脚偏置（只在前腿摆动相生效） */
+void Trajectory_SetFrontSwingHeightBias(DiagonalCycloidGait *gait, float front_bias_m);
 
 /* 每周期调用一次：
  * dt_s: 本周期时间，单位秒

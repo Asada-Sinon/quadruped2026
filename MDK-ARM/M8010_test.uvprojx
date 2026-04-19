@@ -676,6 +676,11 @@
               <FileType>1</FileType>
               <FilePath>..\user\Src\vofa.c</FilePath>
             </File>
+            <File>
+              <FileName>HT10A.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\user\Src\HT10A.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

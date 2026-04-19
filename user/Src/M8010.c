@@ -183,7 +183,7 @@ void cmd_init_2(void)
 		cmd[i].T = 0.0f;
 		cmd[i].W = 0.0f;
 		cmd[i].Pos = 0.0f;
-		cmd[i].K_P = 3.5f;
+		cmd[i].K_P = 4.0f;
 		cmd[i].K_W = 0.02f;
 		modify_data(&cmd[i]);
 	}

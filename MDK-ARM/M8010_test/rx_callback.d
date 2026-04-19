@@ -41,3 +41,13 @@ m8010_test\rx_callback.o: ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_uart
 m8010_test\rx_callback.o: ../user/Inc/robot_map.h
 m8010_test\rx_callback.o: ../user/Inc/M8010.h
 m8010_test\rx_callback.o: E:\Keil\ARM\ARMCC\Bin\..\include\stdlib.h
+m8010_test\rx_callback.o: ../user/Inc/HT10A.h
+m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h
+m8010_test\rx_callback.o: ../Core/Inc/FreeRTOSConfig.h
+m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h
+m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/portable.h
+m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/deprecated_definitions.h
+m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F/portmacro.h
+m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h
+m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/task.h
+m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/list.h
