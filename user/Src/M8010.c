@@ -107,8 +107,8 @@ void modify_data(MotorCmd_t *motor_s)
 	motor_s->motor_send_data.mode.status = motor_s->mode;
 	motor_s->motor_send_data.comd.k_pos = motor_s->K_P / 25.6f * 32768.0f;
 	motor_s->motor_send_data.comd.k_spd = motor_s->K_W / 25.6f * 32768.0f;
-    motor_s->motor_send_data.comd.pos_des = motor_s->Pos / M8010_TWO_PI * 32768.0f;
-    motor_s->motor_send_data.comd.spd_des = motor_s->W   / M8010_TWO_PI * 256.0f;
+	motor_s->motor_send_data.comd.pos_des = motor_s->Pos / M8010_TWO_PI * 32768.0f;
+	motor_s->motor_send_data.comd.spd_des = motor_s->W / M8010_TWO_PI * 256.0f;
 	motor_s->motor_send_data.comd.tor_des = motor_s->T * 256.0f;
 
 	/* 4) 计算并填入帧 CRC（不包含 CRC 字段本身）。 */
@@ -151,7 +151,7 @@ void extract_data(MotorData_t *motor_r)
 			motor_r->PosZeroInited = 1U;
 		}
 		motor_r->PosRel = (motor_r->Pos - motor_r->PosZero) / ROBOT_MOTOR_GEAR_RATIO;
-		//motor_r->PosRel = motor_r->Pos - motor_r->PosZero;
+		// motor_r->PosRel = motor_r->Pos - motor_r->PosZero;
 		motor_r->footForce = motor_r->motor_recv_data.fbk.force;
 		motor_r->correct = 1;
 		return;
@@ -174,46 +174,76 @@ void cmd_init(void)
 		modify_data(&cmd[i]);
 	}
 }
-
+void cmd_init_2(void)
+{
+	for (int i = 0; i < 12; i++)
+	{
+		cmd[i].id = i + 1;
+		cmd[i].mode = 1;
+		cmd[i].T = 0.0f;
+		cmd[i].W = 0.0f;
+		cmd[i].Pos = 0.0f;
+		cmd[i].K_P = 3.5f;
+		cmd[i].K_W = 0.02f;
+		modify_data(&cmd[i]);
+	}
+}
 void cmd_single_test_init(void)
 {
-	cmd[1].id = 2;
-	cmd[1].mode = 1;
-	cmd[1].T = 0.0f;
-	cmd[1].W = 0.0f;
-	cmd[1].Pos = 0.0f;
-	cmd[1].K_P = 0.4f;
-	cmd[1].K_W = 0.02f;
-
-	cmd[2].id = 3;
-	cmd[2].mode = 1;
-	cmd[2].T = 0.0f;
-	cmd[2].W = 0.0f;
-	cmd[2].Pos = 0.0f;
-	cmd[2].K_P = 0.4f;
-	cmd[2].K_W = 0.02f;
-
+	for (int i = 0; i < 12; i++)
+	{
+		cmd[i].id = i + 1;
+		cmd[i].mode = 1;
+		cmd[i].T = 0.0f;
+		cmd[i].W = 0.0f;
+		cmd[i].Pos = 0.0f;
+		cmd[i].K_P = 2.0f;
+		cmd[i].K_W = 0.02f;
+		modify_data(&cmd[i]);
+	}
+	for (int i = 6; i < 12; i++)
+	{
+		cmd[i].id = i + 1;
+		cmd[i].mode = 1;
+		cmd[i].T = 0.0f;
+		cmd[i].W = 0.0f;
+		cmd[i].Pos = 0.0f;
+		cmd[i].K_P = 3.5f;
+		cmd[i].K_W = 0.02f;
+		modify_data(&cmd[i]);
+	}
 	cmd[0].id = 1;
 	cmd[0].mode = 1;
 	cmd[0].T = 0.0f;
 	cmd[0].W = 0.0f;
 	cmd[0].Pos = 0.0f;
-	cmd[0].K_P = 0.4f;
+	cmd[0].K_P = 2.2f;
 	cmd[0].K_W = 0.02f;
 	modify_data(&cmd[0]);
-	modify_data(&cmd[1]);
-	modify_data(&cmd[2]);
-	// for (int i = 0; i < 12; i++)
-	// {
-	// 	cmd[i].id = i + 1;
-	// 	cmd[i].mode = 1;
-	// 	cmd[i].T = 0.0f;
-	// 	cmd[i].W = 0.0f;
-	// 	cmd[i].Pos = 0.0f;
-	// 	cmd[i].K_P = 0.5f;
-	// 	cmd[i].K_W = 0.02f;
-	// 	modify_data(&cmd[i]);
-	// }
+	cmd[3].id = 4;
+	cmd[3].mode = 1;
+	cmd[3].T = 0.0f;
+	cmd[3].W = 0.0f;
+	cmd[3].Pos = 0.0f;
+	cmd[3].K_P = 2.2f;
+	cmd[3].K_W = 0.02f;
+	modify_data(&cmd[3]);
+	cmd[6].id = 7;
+	cmd[6].mode = 1;
+	cmd[6].T = 0.0f;
+	cmd[6].W = 0.0f;
+	cmd[6].Pos = 0.0f;
+	cmd[6].K_P = 2.2f;
+	cmd[6].K_W = 0.02f;
+	modify_data(&cmd[6]);
+	cmd[9].id = 10;
+	cmd[9].mode = 1;
+	cmd[9].T = 0.0f;
+	cmd[9].W = 0.0f;
+	cmd[9].Pos = 0.0f;
+	cmd[9].K_P = 2.2f;
+	cmd[9].K_W = 0.02f;
+	modify_data(&cmd[9]);
 }
 
 void set_cmd_pos_by_index(uint8_t cmd_idx, float pos)

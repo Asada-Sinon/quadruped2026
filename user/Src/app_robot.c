@@ -5,6 +5,7 @@
 #include "gait.h"
 #include "vofa.h"
 #include <math.h>
+#include "trajectory.h"
 
 #define APP_INTERP_DT_MS 1.0f                            /* 每次调用插值函数时，默认推进 1ms 的相位。 */
 #define APP_INTERP_DT_MAX_MS 20.0f                       /* 实测 dt 的上限保护，防止调试停顿后一步跳太大。 */
@@ -14,6 +15,7 @@
 #define APP_INTERP_TARGET_EPS 1.0e-4f                    /* 目标变化阈值，小于该值视为同一目标。 */
 #define APP_MOTOR_COUNT (ROBOT_LEG_NUM * MOTORS_PER_LEG) /* 4 条腿 x 每腿 3 个电机 = 12。 */
 
+static DiagonalCycloidGait g_gait;
 // 这个是电机输出轴的目标角度
 float Target_Angle[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
 /* 保存每个电机本周期算出的平滑目标角，便于调试和可视化。 */
@@ -92,13 +94,9 @@ void App_Robot_Init(void)
     cmd_init();
     // 直接把腿和485端口绑定
     RobotMap_Init();
-    // 这里是新加的
-    /* 默认保持 IK 关闭，避免影响现有 test_angle 角度控制链路。 */
-    /* 若要切换到足端坐标控制，请在上层调用：Gait_EnableIkControl(1); */
-    // 这个注释掉之后就是傻子位控，不带任何正逆运动学的，直接把目标角发给电机就行了。现在打开就是足端坐标控制，输入足端目标点，内部自动反解成关节角发给电机。
     send_data_all(legs);
-    // 这里直接初始化012，左前腿。
-    //cmd_single_test_init();
+    cmd_single_test_init();
+    Trajectory_InitDefault(&g_gait);
     VOFA_JF_DMA_Init(&hvofa, &huart6);
 }
 
@@ -110,11 +108,36 @@ void App_Robot_Init(void)
  *
  * 注意：这里不做阻塞延时，实时性由外层 1ms 调度保障。
  */
+float test_position[3] = {-0.0638, 0.078, -0.3230};
+int test_position_idx = 0;
+float freq = 1.6f;      // Hz
+float highteee = 0.05f; // m
+float lentheee = 0.05f;
+float paradm = 0.0f;
 void App_Robot_Loop1ms(void)
 {
     /* 计算本周期真实 dt，后续 12 路插值都使用这个时间步长。 */
     g_interp_dt_ms = app_get_real_dt_ms();
-    /* 当前相对角统一从 motor_r.PosRel 读取，不再维护冗余全局缓存。 */
+    float dt_s = g_interp_dt_ms / 1000.0f;
+    if (test_position_idx == 0)
+    {
+        Gait_SetLegFootTargetM(0, test_position[0], test_position[1], test_position[2]);
+        Gait_SetLegFootTargetM(2, test_position[0], test_position[1], test_position[2] - 0.05f);
+        Gait_SetLegFootTargetM(1, test_position[0], -test_position[1], test_position[2]);
+        Gait_SetLegFootTargetM(3, test_position[0], -test_position[1], test_position[2] - 0.05f);
+    }
+    else
+    {
+        if (paradm == 0.0f)
+        {
+            cmd_init_2();
+            paradm = 1.0f;
+        }
+        Trajectory_SetStepLength(&g_gait, lentheee);
+        Trajectory_SetFrequency(&g_gait, freq);
+        Trajectory_SetSwingHeight(&g_gait, highteee);
+        Trajectory_Update(&g_gait, dt_s);
+    }
     // 四个腿根据足端位置，逆运动学设置关节位置
     Gait_UpdateTargetAngleFromFootTarget(Target_Angle);
     // 根据目标角度算平滑值，算完后面发就是这个值
@@ -203,7 +226,7 @@ float App_motor_angle_calculate(float target_angle, float pos_rel)
     if (elapsed_ms[idx] < duration_ms[idx])
     {
         /* 按本周期实测 dt 推进插值时间。 */
-        elapsed_ms[idx] += g_interp_dt_ms;
+        elapsed_ms[idx] += 2*g_interp_dt_ms;
         /* 防止最后一步超过总时长。 */
         if (elapsed_ms[idx] > duration_ms[idx])
         {
@@ -243,7 +266,7 @@ float App_target_relative_to_absolute(float pos_rel,
      * abs_cmd = 当前绝对角 + dir * (目标相对角 - 当前相对角)
      * 这样可把“相对目标”准确映射回电机协议要的“绝对角”。
      */
-    //return pos_abs + dir * delta_rel;
+    // return pos_abs + dir * delta_rel;
     return pos_abs + dir * delta_rel * ROBOT_MOTOR_GEAR_RATIO;
 }
 // 所有电机平滑计算，算完直接给到cmd里面
@@ -273,13 +296,13 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
             /* 用当前电机目标角 + 当前电机反馈角，求本周期平滑角。 */
             g_smoothed_angle[leg_idx][motor_idx] = App_motor_angle_calculate(target_angle[leg_idx][motor_idx],
                                                                              current_model_angle);
-                  /* 模型关节目标角 -> 电机相对角 */
+            /* 模型关节目标角 -> 电机相对角 */
             target_motor_rel =
                 App_Model_Joint_Angle_To_Motor_Rel(leg_idx,
                                                    motor_idx,
                                                    g_smoothed_angle[leg_idx][motor_idx]);
 
-           /* 电机相对角 -> 电机绝对角命令 */
+            /* 电机相对角 -> 电机绝对角命令 */
             target_abs = App_target_relative_to_absolute(motor->motor_r.PosRel,
                                                          target_motor_rel,
                                                          motor->motor_r.Pos,
@@ -300,7 +323,7 @@ void App_UpdateCurrentFootPosFromMotor(Leg leg[ROBOT_LEG_NUM])
 
     for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
     {
-        //float joint_pos[3];
+        // float joint_pos[3];
         float foot_pos[3];
         uint8_t valid = 1U;
 
@@ -332,4 +355,3 @@ void App_UpdateCurrentFootPosFromMotor(Leg leg[ROBOT_LEG_NUM])
         g_foot_current_m[leg_idx].z_m = foot_pos[Z_IDX];
     }
 }
-

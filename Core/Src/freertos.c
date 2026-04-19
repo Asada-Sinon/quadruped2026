@@ -58,7 +58,6 @@ osThreadId myTask03Handle;
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 //int test = 0;
-float test_position[3] = {0, 0, 0};
 //float test_angle[3] = {-5.15, -0.61, 5.47};
 /* USER CODE END FunctionPrototypes */
 
@@ -112,7 +111,7 @@ void MX_FREERTOS_Init(void) {
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, motor, osPriorityNormal, 0, 128);
+  osThreadDef(defaultTask, motor, osPriorityNormal, 0, 512);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* definition and creation of myTask02 */
@@ -143,9 +142,8 @@ void motor(void const * argument)
   for(;;)
   {
     //足端单位是m
-    Gait_SetLegFootTargetM(0, test_position[0], test_position[1], test_position[2]);
     App_Robot_Loop1ms();
-    osDelay(3);
+    osDelay(5);
   }
   /* USER CODE END motor */
 }

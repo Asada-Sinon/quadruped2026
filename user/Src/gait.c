@@ -127,11 +127,6 @@ void leg_forward_kinematics_vel(uint8_t leg_id, const float joint_pos[3], const 
 // 给单腿发送足端位置
 uint8_t Gait_SetLegFootTargetM(uint8_t leg_idx, float x_m, float y_m, float z_m)
 {
-	if (leg_idx >= ROBOT_LEG_NUM)
-	{
-		return 1U;
-	}
-
 	g_foot_target_m[leg_idx].x_m = x_m;
 	g_foot_target_m[leg_idx].y_m = y_m;
 	g_foot_target_m[leg_idx].z_m = z_m;

@@ -57,3 +57,4 @@ m8010_test\app_robot.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/semph
 m8010_test\app_robot.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/event_groups.h
 m8010_test\app_robot.o: ../user/Inc/gait.h
 m8010_test\app_robot.o: ../user/Inc/vofa.h
+m8010_test\app_robot.o: ../user/Inc/trajectory.h

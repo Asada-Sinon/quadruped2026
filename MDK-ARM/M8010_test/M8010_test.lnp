@@ -46,6 +46,7 @@
 "m8010_test\robot_map.o"
 "m8010_test\app_robot.o"
 "m8010_test\gait.o"
+"m8010_test\trajectory.o"
 --strict --scatter "M8010_test\M8010_test.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

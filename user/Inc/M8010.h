@@ -171,6 +171,6 @@ void send_data_all(Leg *leg);
  * 这样 send_data_all 下一次发送时就会用最新位置。
  */
 void set_cmd_pos_by_index(uint8_t cmd_idx, float pos);
-
+void cmd_init_2(void);
 
 #endif
