@@ -143,7 +143,7 @@ void motor(void const * argument)
   {
     //足端单位是m
     App_Robot_Loop1ms();
-    osDelay(5);
+    osDelay(3);
   }
   /* USER CODE END motor */
 }
