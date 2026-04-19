@@ -359,13 +359,15 @@ static void App_UpdateCrawlFootTarget(float dt_s)
 /* 自由运动模式：
  * 1) 频率/抬脚高度仍沿用当前 WALK 参数（按你的要求不被摇杆覆盖）；
  * 2) 摇杆实时控制 body-frame Vx/Vy/Vw，实现全向平移 + 自转；
- * 3) 该模式不使用固定前后步长，故 step_length 置零。
+ * 3) 该模式不使用固定前后步长，故 step_length 置零；
+ * 4) 足端高度与 CRAWL 保持一致：四足 z 统一加 APP_CRAWL_Z_OFFSET_M。
  */
 static void App_UpdateFreeMoveFootTarget(float dt_s)
 {
     float vx_cmd_m_s;
     float vy_cmd_m_s;
     float w_cmd_rad_s;
+    uint8_t leg_idx;
 
     App_GetFreeMoveVelocityCmd(&vx_cmd_m_s, &vy_cmd_m_s, &w_cmd_rad_s);
 
@@ -374,6 +376,15 @@ static void App_UpdateFreeMoveFootTarget(float dt_s)
     Trajectory_SetStepLength(&g_gait, 0.0f);
     Trajectory_SetBodyVelocity(&g_gait, vx_cmd_m_s, vy_cmd_m_s, w_cmd_rad_s);
     Trajectory_Update(&g_gait, dt_s);
+
+    /* 与 CRAWL 模式保持一致：四条腿 z 统一上移固定偏置。 */
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        Gait_SetLegFootTargetM(leg_idx,
+                               g_foot_target_m[leg_idx].x_m,
+                               g_foot_target_m[leg_idx].y_m,
+                               g_foot_target_m[leg_idx].z_m + APP_CRAWL_Z_OFFSET_M);
+    }
 }
 // 修改模式
 void App_SetControlMode(RobotControlMode mode)
