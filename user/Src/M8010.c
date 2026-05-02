@@ -6,6 +6,9 @@
 #include "robot_map.h"
 #define M8010_TWO_PI 6.28318530718f
 #define M8010_DMA_WAIT_TIMEOUT_MS 5U
+#define M8010_EXTRA_MOTOR13_LEG_IDX (ROBOT_LEG_NUM - 1U)
+#define M8010_EXTRA_MOTOR13_ID 13U
+#define M8010_EXTRA_MOTOR13_SIGN (-1)
 /*
  * M8010 协议编解码实现。
  *
@@ -162,6 +165,18 @@ void extract_data(MotorData_t *motor_r)
 MotorCmd_t cmd[12];
 MotorData_t recv;
 
+/*
+ * 外部可写：
+ * - g_motor13_target_angle: ID13 本周期位置目标(rad)
+ * - g_motor13_target_kp:    ID13 本周期 Kp
+ */
+float g_motor13_target_angle = 0.0f;
+float g_motor13_target_kp = 0.0f;
+
+/* 4 号腿新增 ID13 的本地发送/接收槽位。 */
+static MotorCmd_t g_motor13_cmd;
+M8010 g_motor13;
+
 /* 4 路 485 口对应的 DMA 接收缓冲（每路 1 帧）。 */
 static uint8_t g_motor_dma_rx_buf[ROBOT_LEG_NUM][sizeof(RIS_MotorData_t)] = {0};
 /* 当前发送等待的目标电机 ID（用于匹配回包）。 */
@@ -170,6 +185,22 @@ static volatile uint8_t g_motor_dma_expected_id[ROBOT_LEG_NUM] = {0};
 static volatile uint8_t g_motor_dma_rx_done[ROBOT_LEG_NUM] = {0};
 /* 本轮回包是否匹配目标电机且校验通过。 */
 static volatile uint8_t g_motor_dma_rx_match[ROBOT_LEG_NUM] = {0};
+
+/* 初始化新增 ID13 电机的默认发送参数。 */
+static void motor13_init_cmd(void)
+{
+	g_motor13_cmd.id = M8010_EXTRA_MOTOR13_ID;
+	g_motor13_cmd.mode = 1U;
+	g_motor13_cmd.T = 0.0f;
+	g_motor13_cmd.W = 0.0f;
+	g_motor13_cmd.Pos = 0.0f;
+	g_motor13_cmd.K_P = 0.0f;
+	g_motor13_cmd.K_W = 0.02f;
+	modify_data(&g_motor13_cmd);
+
+	g_motor13.motor_s.id = M8010_EXTRA_MOTOR13_ID;
+	g_motor13.sign = M8010_EXTRA_MOTOR13_SIGN;
+}
 
 void MotorBus_Restart(uint8_t leg_idx)
 {
@@ -243,6 +274,12 @@ void MotorBus_Process(uint8_t leg_idx, uint16_t size)
 	{
 		motor = &legs[leg_idx].motors_peer_leg[2];
 	}
+	/* 4 号腿额外电机：ID13。 */
+	else if ((leg_idx == M8010_EXTRA_MOTOR13_LEG_IDX) &&
+			 (motor_id == M8010_EXTRA_MOTOR13_ID))
+	{
+		motor = &g_motor13;
+	}
 
 	if (motor != NULL)
 	{
@@ -272,6 +309,7 @@ void cmd_init(void)
 		cmd[i].K_W = 0.0f;
 		modify_data(&cmd[i]);
 	}
+	motor13_init_cmd();
 }
 void cmd_init_2(void)
 {
@@ -286,6 +324,7 @@ void cmd_init_2(void)
 		cmd[i].K_W = 0.03f;
 		modify_data(&cmd[i]);
 	}
+	motor13_init_cmd();
 }
 void cmd_single_test_init(void)
 {
@@ -343,6 +382,7 @@ void cmd_single_test_init(void)
 	cmd[9].K_P = 2.2f;
 	cmd[9].K_W = 0.02f;
 	modify_data(&cmd[9]);
+	motor13_init_cmd();
 }
 
 void set_cmd_pos_by_index(uint8_t cmd_idx, float pos)
@@ -400,6 +440,52 @@ void send_data_all(Leg *leg)
 				(g_motor_dma_rx_match[leg_idx] == 0U))
 			{
 				motor->motor_r.timeout++;
+			}
+		}
+
+		/*
+		 * 在 4 号腿同一路 485 再发送新增的 ID13：
+		 * 角度/Kp 直接取外部全局变量，便于应用层实时覆盖。
+		 */
+		if ((uint8_t)leg_idx == M8010_EXTRA_MOTOR13_LEG_IDX)
+		{
+			uint32_t start_tick;
+
+			g_motor13_cmd.Pos = g_motor13_target_angle;
+			g_motor13_cmd.K_P = g_motor13_target_kp;
+			modify_data(&g_motor13_cmd);
+
+			g_motor_dma_expected_id[leg_idx] = (uint8_t)g_motor13_cmd.id;
+			g_motor_dma_rx_done[leg_idx] = 0U;
+			g_motor_dma_rx_match[leg_idx] = 0U;
+
+			HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_SET);
+			if (HAL_UART_Transmit_DMA(leg[leg_idx].huart,
+						  (uint8_t *)&g_motor13_cmd.motor_send_data,
+						  sizeof(RIS_ControlData_t)) != HAL_OK)
+			{
+				HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
+				g_motor13.motor_r.timeout++;
+				continue;
+			}
+
+			start_tick = HAL_GetTick();
+			while (g_motor_dma_rx_done[leg_idx] == 0U)
+			{
+				if ((HAL_GetTick() - start_tick) >= M8010_DMA_WAIT_TIMEOUT_MS)
+				{
+					(void)HAL_UART_AbortTransmit(leg[leg_idx].huart);
+					(void)HAL_UART_AbortReceive(leg[leg_idx].huart);
+					HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
+					g_motor13.motor_r.timeout++;
+					break;
+				}
+			}
+
+			if ((g_motor_dma_rx_done[leg_idx] != 0U) &&
+				(g_motor_dma_rx_match[leg_idx] == 0U))
+			{
+				g_motor13.motor_r.timeout++;
 			}
 		}
 	}

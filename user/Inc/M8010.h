@@ -165,6 +165,16 @@ void cmd_single_test_init(void);
 void send_data_all(Leg *leg);
 
 /*
+ * 4 号腿新增 ID13 电机的外部控制变量：
+ * - g_motor13_target_angle: 本周期要下发的位置角(rad)
+ * - g_motor13_target_kp:    本周期要下发的刚度 Kp
+ *
+ * 你可以在应用层直接写这两个变量，send_data_all() 会按当前值发送给 ID13。
+ */
+extern float g_motor13_target_angle;
+extern float g_motor13_target_kp;
+
+/*
  * 按线性编号(0~11)更新某个电机的位置指令：
  * 1) 写入 cmd[cmd_idx].Pos
  * 2) 立即调用 modify_data 重新打包发送帧

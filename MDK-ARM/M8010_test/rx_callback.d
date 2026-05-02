@@ -42,6 +42,7 @@ m8010_test\rx_callback.o: ../user/Inc/robot_map.h
 m8010_test\rx_callback.o: ../user/Inc/M8010.h
 m8010_test\rx_callback.o: E:\Keil\ARM\ARMCC\Bin\..\include\stdlib.h
 m8010_test\rx_callback.o: ../user/Inc/HT10A.h
+m8010_test\rx_callback.o: ../user/Inc/imu.h
 m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h
 m8010_test\rx_callback.o: ../Core/Inc/FreeRTOSConfig.h
 m8010_test\rx_callback.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h

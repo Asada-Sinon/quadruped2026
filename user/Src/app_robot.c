@@ -7,6 +7,7 @@
 #include <math.h>
 #include "trajectory.h"
 #include "HT10A.h"
+#include "imu.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -473,7 +474,7 @@ void App_Robot_Init(void)
     // 直接把腿和485端口绑定
     RobotMap_Init();
     send_data_all(legs);
-    cmd_single_test_init();
+    //cmd_single_test_init();
     Trajectory_InitDefault(&g_gait);
     /* 启动时也统一让 walk nominal 以 stand 位姿为基准。 */
     App_SyncWalkNominalFromStandPose();
@@ -482,6 +483,7 @@ void App_Robot_Init(void)
     g_app_ctrl.last_mode = g_app_ctrl.mode;
     VOFA_JF_DMA_Init(&hvofa, &huart6);
     Teaching_Pendant_Restart();
+    IMU_Restart();
 }
 float bios = 0.015f; // 前腿相对后腿的额外抬高，默认多抬高 1.5cm，避免前腿摆动时过低不稳
 /*
