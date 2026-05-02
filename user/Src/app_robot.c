@@ -10,6 +10,7 @@
 #include "imu.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "pc_comm_uart10.h"
 
 #define APP_INTERP_DT_MS 1.0f                            /* 每次调用插值函数时，默认推进 1ms 的相位。 */
 #define APP_INTERP_DT_MAX_MS 20.0f                       /* 实测 dt 的上限保护，防止调试停顿后一步跳太大。 */
@@ -98,20 +99,22 @@ static float g_interp_duration_ms[APP_MOTOR_COUNT] = {0};
 /* 每个电机插值状态是否已初始化。 */
 static uint8_t g_interp_inited[APP_MOTOR_COUNT] = {0};
 // 物理世界中固定的上电位置并非0位，而是有一个偏置的，这个函数就是把这个偏置加上去，得到一个更符合机械定义的角度值，方便上层算法使用。
-static float App_Get_Model_Joint_Angle(uint8_t leg_idx,
-                                       uint8_t motor_idx,
-                                       const M8010 *motor)
+float App_Get_Model_Joint_Angle(uint8_t leg_idx,
+                                uint8_t motor_idx,
+                                const M8010 *motor)
 {
-    float trans_dir = (float)g_joint_transmission_sign[leg_idx][motor_idx];
-    return trans_dir * motor->motor_r.PosRel + g_joint_offset_rad[leg_idx][motor_idx];
+    uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
+    float trans_dir = g_joint_transmission_sign[joint_idx];
+    return trans_dir * motor->motor_r.PosRel + g_joint_offset_rad[joint_idx];
 }
 // 上面函数的反算版本，模型关节角转电机相对角，输入是模型关节角，输出是电机相对角（已经考虑安装方向和零位偏置）。这个函数在 gait.c 的 Gait_UpdateTargetAngleFromFootTarget() 里被调用，用于把足端目标经过 IK 转成关节角后，再转成电机相对角发给电机。
 static float App_Model_Joint_Angle_To_Motor_Rel(uint8_t leg_idx,
                                                 uint8_t motor_idx,
                                                 float joint_angle)
 {
-    float trans_dir = (float)g_joint_transmission_sign[leg_idx][motor_idx];
-    return (joint_angle - g_joint_offset_rad[leg_idx][motor_idx]) / trans_dir;
+    uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
+    float trans_dir = g_joint_transmission_sign[joint_idx];
+    return (joint_angle - g_joint_offset_rad[joint_idx]) / trans_dir;
 }
 
 static float app_clampf(float in, float min_val, float max_val)
@@ -484,6 +487,8 @@ void App_Robot_Init(void)
     VOFA_JF_DMA_Init(&hvofa, &huart6);
     Teaching_Pendant_Restart();
     IMU_Restart();
+    PCComm_Init();
+    PCComm_StartReceive();
 }
 float bios = 0.015f; // 前腿相对后腿的额外抬高，默认多抬高 1.5cm，避免前腿摆动时过低不稳
 /*
@@ -500,6 +505,30 @@ void App_Robot_Loop1ms(void)
     /* 计算本周期真实 dt，后续 12 路插值都使用这个时间步长。 */
     g_interp_dt_ms = app_get_real_dt_ms();
     float dt_s = g_interp_dt_ms / 1000.0f;
+    static uint8_t pc_policy_was_active = 0U;
+    uint8_t pc_policy_active;
+
+    PCComm_Task1ms();
+    PCComm_SendState20ms();
+
+    pc_policy_active = PCComm_IsPolicyControlAllowed();
+    if ((pc_policy_active != 0U) &&
+        ((g_app_ctrl.mode == ROBOT_MODE_STAND) ||
+         (g_app_ctrl.mode == ROBOT_MODE_WALK)))
+    {
+        float q_des_urdf[J_NUM];
+        PCComm_GetQDesUrdf(q_des_urdf);
+        App_Set_Model_Joint_Target_Angle(q_des_urdf);
+        send_data_all(legs);
+        pc_policy_was_active = 1U;
+        return;
+    }
+
+    if (pc_policy_was_active != 0U)
+    {
+        App_SetControlMode(ROBOT_MODE_STAND);
+        pc_policy_was_active = 0U;
+    }
 
     /* 模式切换检测：只在切换边沿执行 entry 动作，避免每拍重复做初始化。 */
     if (g_app_ctrl.mode != g_app_ctrl.last_mode)
@@ -660,8 +689,9 @@ float App_target_relative_to_absolute(float pos_rel,
     return pos_abs + dir * delta_rel * ROBOT_MOTOR_GEAR_RATIO;
 }
 // 所有电机平滑计算，算完直接给到cmd里面
-void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
-                             Leg leg[ROBOT_LEG_NUM])
+static void App_all_motor_calculate_internal(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
+                                             Leg leg[ROBOT_LEG_NUM],
+                                             uint8_t use_stand_interpolation)
 {
     /* 外层腿编号 0~3。 */
     uint8_t leg_idx;
@@ -683,7 +713,7 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
             float target_abs;
 
             current_model_angle = App_Get_Model_Joint_Angle(leg_idx, motor_idx, motor);
-            if (g_app_ctrl.mode == ROBOT_MODE_STAND)
+            if ((use_stand_interpolation != 0U) && (g_app_ctrl.mode == ROBOT_MODE_STAND))
             {
                 /* 站立模式保留关节插值：直接给终点角时，用五次曲线减少瞬时冲击。 */
                 g_interp_ctx_idx = cmd_idx;
@@ -715,6 +745,78 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
     }
 }
 // 根据电机当前角度来计算当前足端位置
+void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
+                             Leg leg[ROBOT_LEG_NUM])
+{
+    App_all_motor_calculate_internal(target_angle, leg, 1U);
+}
+
+void App_Set_Model_Joint_Target_Angle(const float q_des_urdf[J_NUM])
+{
+    float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG];
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    if (q_des_urdf == 0)
+    {
+        return;
+    }
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
+            target_angle[leg_idx][motor_idx] = q_des_urdf[joint_idx];
+        }
+    }
+
+    App_all_motor_calculate_internal(target_angle, legs, 0U);
+}
+
+void App_Get_Model_Joint_Angles(float q_urdf_out[J_NUM])
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    if (q_urdf_out == 0)
+    {
+        return;
+    }
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
+            M8010 *motor = &legs[leg_idx].motors_peer_leg[motor_idx];
+            q_urdf_out[joint_idx] = App_Get_Model_Joint_Angle(leg_idx, motor_idx, motor);
+        }
+    }
+}
+
+void App_Get_Model_Joint_Velocities(float qd_urdf_out[J_NUM])
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    if (qd_urdf_out == 0)
+    {
+        return;
+    }
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
+            M8010 *motor = &legs[leg_idx].motors_peer_leg[motor_idx];
+            float pos_rel_vel = (motor->motor_r.W / ROBOT_MOTOR_GEAR_RATIO) * (float)motor->sign;
+            qd_urdf_out[joint_idx] = g_joint_transmission_sign[joint_idx] * pos_rel_vel;
+        }
+    }
+}
+
 float joint_pos[3];
 void App_UpdateCurrentFootPosFromMotor(Leg leg[ROBOT_LEG_NUM])
 {

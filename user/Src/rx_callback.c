@@ -4,6 +4,7 @@
 #include "imu.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "pc_comm_uart10.h"
 /*
  * UART DMA 接收完成回调。
  * 这里只处理 USART1 手柄数据。
@@ -66,6 +67,11 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
         MotorBus_Restart(3U);
         return;
     }
+    if (huart->Instance == USART10)
+    {
+        PCComm_OnUart10TxCplt();
+        return;
+    }
 }
 
 /*
@@ -97,6 +103,11 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     if (huart->Instance == UART7)
     {
         MotorBus_Process(3U, sizeof(RIS_MotorData_t));
+        return;
+    }
+    if (huart->Instance == USART10)
+    {
+        PCComm_OnUart10RxCplt();
         return;
     }
 }
@@ -139,6 +150,10 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     }
     if(huart->Instance == UART7) {
         MotorBus_Restart(3U);
+        return;
+    }
+    if(huart->Instance == USART10) {
+        PCComm_StartReceive();
         return;
     }
 }

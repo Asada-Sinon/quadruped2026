@@ -686,6 +686,11 @@
               <FileType>1</FileType>
               <FilePath>..\user\Src\imu.c</FilePath>
             </File>
+            <File>
+              <FileName>pc_comm_uart10.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\user\Src\pc_comm_uart10.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

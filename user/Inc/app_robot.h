@@ -56,6 +56,13 @@ void App_SetControlMode(RobotControlMode mode);
 /* 获取当前控制模式，便于上层做状态显示或调试。 */
 RobotControlMode App_GetControlMode(void);
 
+float App_Get_Model_Joint_Angle(uint8_t leg_idx,
+                                uint8_t motor_idx,
+                                const M8010 *motor);
+void App_Get_Model_Joint_Angles(float q_urdf_out[J_NUM]);
+void App_Get_Model_Joint_Velocities(float qd_urdf_out[J_NUM]);
+void App_Set_Model_Joint_Target_Angle(const float q_des_urdf[J_NUM]);
+
 /*
  * 设置行走参数：
  * - freq_hz: 步态频率(Hz)
