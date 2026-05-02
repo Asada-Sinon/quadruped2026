@@ -1,0 +1,48 @@
+# ==============================
+# Keil MDK-ARM (uVision) Git 忽略规则
+# 说明：只忽略“可再生文件”和“本机相关文件”，源码与工程文件保留入库
+# ==============================
+
+# 1) uVision 本机/用户相关配置（不同电脑会变化，不建议入库）
+*.uvoptx
+*.uvguix.*
+*.uvgui.*
+
+# 2) 编译中间文件与产物（可由工程重新生成）
+*.axf
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.o
+*.obj
+*.crf
+*.d
+*.dep
+*.lnp
+*.iex
+*.sbr
+*.bak
+*.tmp
+
+# 3) 本工程输出目录中常见的构建日志/散装文件
+M8010_test/*.htm
+M8010_test/*.sct
+
+# 4) 常见构建输出目录（若存在）
+Objects/
+Listings/
+Debug/
+Release/
+
+# 5) CMSIS-Pack 自动生成的目标配置目录
+RTE/_Target_*/
+
+# 6) Keil 调试配置生成目录
+DebugConfig/
+
+# 7) 编辑器/系统噪声文件
+.vscode/
+Thumbs.db
+.DS_Store
