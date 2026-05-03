@@ -29,6 +29,31 @@
 #define PC_COMM_ASCII_HELLO_TEST 0U
 #define PC_COMM_FAKE_STATE_TEST 0U
 
+/*
+ * PC 侧命令的运行时缓存。
+ *
+ * 注意：
+ * JointCommandPacket 是 UART 线协议结构体，受 pc_comm_uart10.h 中
+ * #pragma pack(1) 约束，只能用于收包、帧头检查、CRC 校验和逐字段解析。
+ *
+ * 运行时控制逻辑不能直接保存 JointCommandPacket，也不能把
+ * JointCommandPacket.q_des 作为普通 float* 传入控制函数。packed 结构体
+ * 内部的 float 数组可能不是 4 字节自然对齐，在 STM32H7 / Cortex-M 上
+ * 可能因为非对齐 float 访问触发 UsageFault/HardFault，表现为 enable=1
+ * 后状态包停止发送。
+ *
+ * 因此这里定义自然对齐的运行时结构体。ISR 收到合法线协议包后，只把
+ * tick_ms、enable、mode 和 q_des[] 逐字段复制进来；后续 1ms 控制任务
+ * 只能读取这个自然对齐缓存中的 q_des。
+ */
+typedef struct
+{
+    uint32_t tick_ms;
+    uint8_t enable;
+    uint8_t mode;
+    float q_des[J_NUM];
+} PCCommRuntimeCommand;
+
 /* 关节角安全下限（URDF 顺序，单位 rad）。 */
 static const float g_joint_limit_low[J_NUM] = {
     -1.2f, -1.2f, -2.3f,
@@ -65,11 +90,35 @@ static uint16_t g_rx_index = 0U;
  * g_pending_tick_ms: 指令到达时间戳；
  * g_last_command_tick_ms: 最后一次生效指令的时间戳。
  */
-static JointCommandPacket g_latest_command;
-static JointCommandPacket g_pending_command;
+static PCCommRuntimeCommand g_latest_command;
+static PCCommRuntimeCommand g_pending_command;
 static volatile uint8_t g_pending_ready = 0U;
 static volatile uint32_t g_pending_tick_ms = 0U;
 static uint32_t g_last_command_tick_ms = 0U;
+
+/*
+ * PC 命令接收调试计数：ISR 中通过帧头、CRC、字段范围和安全校验后，
+ * 已经被接受并复制到 pending 运行时缓存的命令数量。
+ */
+volatile uint32_t g_debug_pc_cmd_accept_count = 0U;
+
+/*
+ * PC 命令转交调试计数：任务态已经把 pending 命令短临界区复制出来，
+ * 并更新为 latest 运行时命令的次数。
+ */
+volatile uint32_t g_debug_pc_cmd_take_count = 0U;
+
+/*
+ * PC q_des 滤波调试计数：PCComm_Task1ms() 当前确实处于 policy allowed
+ * 路径，并使用 PC 下发的自然对齐 q_des[] 做限速滤波的次数。
+ */
+volatile uint32_t g_debug_pc_allowed_rate_qdes_count = 0U;
+
+/*
+ * 默认站姿滤波调试计数：PCComm_Task1ms() 当前未允许 policy 接管，
+ * 因而使用 g_joint_default_stand_rad[] 做限速滤波的次数。
+ */
+volatile uint32_t g_debug_pc_stand_rate_qdes_count = 0U;
 
 /*
  * 目标关节与安全状态：
@@ -199,14 +248,39 @@ static uint8_t pccomm_validate_command(const JointCommandPacket *pkt)
  */
 static void pccomm_accept_command_from_isr(const JointCommandPacket *pkt)
 {
+    uint8_t i;
+
     if (g_estop != 0U)
     {
         return;
     }
 
-    g_pending_command = *pkt;
+    if (pkt == 0)
+    {
+        return;
+    }
+
+    /*
+     * 这里的 pkt 是 packed 线协议包，只允许在本函数中逐字段读取。
+     * 读取后立即复制到自然对齐的 g_pending_command。
+     *
+     * 绝对不要把 packed JointCommandPacket 整体保存为运行时状态，
+     * 也不要把 pkt->q_des 的地址传给普通 float* 函数。这样可以避免
+     * STM32H7 / Cortex-M 在 enable=1 后访问非 4 字节对齐 float 数组时
+     * 触发 UsageFault/HardFault，导致状态包停止发送。
+     */
+    g_pending_command.tick_ms = pkt->tick_ms;
+    g_pending_command.enable = pkt->enable;
+    g_pending_command.mode = pkt->mode;
+
+    for (i = 0U; i < (uint8_t)J_NUM; i++)
+    {
+        g_pending_command.q_des[i] = pkt->q_des[i];
+    }
+
     g_pending_tick_ms = HAL_GetTick();
     g_pending_ready = 1U;
+    g_debug_pc_cmd_accept_count++;
 }
 
 /*
@@ -215,7 +289,7 @@ static void pccomm_accept_command_from_isr(const JointCommandPacket *pkt)
  */
 static void pccomm_take_pending_command(void)
 {
-    JointCommandPacket cmd_local;
+    PCCommRuntimeCommand cmd_local;
     uint32_t tick_local;
     uint32_t primask;
 
@@ -234,6 +308,11 @@ static void pccomm_take_pending_command(void)
         }
         return;
     }
+    /*
+     * g_pending_command 已经是自然对齐的运行时结构体，这里可以整体复制。
+     * 临界区只保护 pending -> local 的短复制，不做限速滤波、CRC 或其它
+     * 耗时操作，避免扩大关中断时间。
+     */
     cmd_local = g_pending_command;
     tick_local = g_pending_tick_ms;
     g_pending_ready = 0U;
@@ -244,6 +323,7 @@ static void pccomm_take_pending_command(void)
 
     g_latest_command = cmd_local;
     g_last_command_tick_ms = tick_local;
+    g_debug_pc_cmd_take_count++;
 }
 
 /*
@@ -439,13 +519,22 @@ void PCComm_Init(void)
     memset(&g_pending_command, 0, sizeof(g_pending_command));
     pccomm_reset_parser();
 
-    g_latest_command.head = PC_COMM_COMMAND_HEAD;
+    /*
+     * g_latest_command / g_pending_command 是自然对齐的运行时缓存，
+     * 不再是 JointCommandPacket，因此没有 head/crc 字段。帧头和 CRC
+     * 只属于 UART 线协议解析阶段，不能进入长期控制状态。
+     */
+    g_latest_command.tick_ms = 0U;
     g_latest_command.enable = 0U;
     g_latest_command.mode = 0U;
+    g_pending_command.tick_ms = 0U;
+    g_pending_command.enable = 0U;
+    g_pending_command.mode = 0U;
 
     for (i = 0U; i < (uint8_t)J_NUM; i++)
     {
         g_latest_command.q_des[i] = g_joint_default_stand_rad[i];
+        g_pending_command.q_des[i] = g_joint_default_stand_rad[i];
         g_q_des_filtered[i] = g_joint_default_stand_rad[i];
     }
 
@@ -457,6 +546,10 @@ void PCComm_Init(void)
     g_estop = 0U;
     g_attitude_safe = 1U;
     g_fault_code = PC_COMM_FAULT_NONE;
+    g_debug_pc_cmd_accept_count = 0U;
+    g_debug_pc_cmd_take_count = 0U;
+    g_debug_pc_allowed_rate_qdes_count = 0U;
+    g_debug_pc_stand_rate_qdes_count = 0U;
 }
 
 /* 启动 UART10 1 字节中断接收（回调里会持续重启）。 */
@@ -473,15 +566,19 @@ void PCComm_Task1ms(void)
 
     if (PCComm_IsPolicyControlAllowed() != 0U)
     {
-        pccomm_rate_limit_qdes(g_latest_command.q_des);
         /*
-         * 实验4：虽然允许接管，但不使用 PC 发来的 q_des，
-         * 仍然使用默认站姿目标做滤波。
+         * enable=1 时会进入这里。这里传入的是自然对齐的
+         * PCCommRuntimeCommand.q_des，不再是 packed JointCommandPacket.q_des。
+         * 这正好解释此前现象：enable=0 时走默认站姿所以正常；enable=1 时
+         * 读取 packed 缓存的 q_des 才可能触发非对齐访问；实验4改用默认站姿后
+         * 恢复 49~50Hz，也说明故障集中在 packed q_des 的运行时访问路径。
          */
-        //pccomm_rate_limit_qdes(g_joint_default_stand_rad);
+        g_debug_pc_allowed_rate_qdes_count++;
+        pccomm_rate_limit_qdes(g_latest_command.q_des);
     }
     else
     {
+        g_debug_pc_stand_rate_qdes_count++;
         pccomm_rate_limit_qdes(g_joint_default_stand_rad);
     }
 }
