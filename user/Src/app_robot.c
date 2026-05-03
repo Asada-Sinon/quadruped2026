@@ -87,8 +87,8 @@ AppControlContext g_app_ctrl =
          -APP_DEFAULT_STAND_Y_M},
         {APP_DEFAULT_STAND_Z_M,
          APP_DEFAULT_STAND_Z_M,
-         APP_DEFAULT_STAND_Z_M+0.005f, // 后腿相对前腿的 z 偏置，默认多降低 1cm，避免后腿抬得过高不稳
-         APP_DEFAULT_STAND_Z_M+0.005f},
+         APP_DEFAULT_STAND_Z_M + 0.005f, // 后腿相对前腿的 z 偏置，默认多降低 1cm，避免后腿抬得过高不稳
+         APP_DEFAULT_STAND_Z_M + 0.005f},
         APP_DEFAULT_WALK_FREQ_HZ,
         APP_DEFAULT_WALK_SWING_HEIGHT_M,
         APP_DEFAULT_WALK_STEP_LENGTH_M,
@@ -244,7 +244,7 @@ static void App_CopyMotorCommandSnapshotToLocal(AppMotorCmdSnapshot local[ROBOT_
  * motorsend 只把快照写入 cmd[]。这里不覆盖 motor_r 反馈、不覆盖 UART 句柄、GPIO、
  * sign 等硬件映射；额外 ID13 不放入本二维快照，仍由 M8010.c 内部现有逻辑处理。
  */
-static void App_ApplyMotorCommandSnapshotToSendBuffer(const AppMotorCmdSnapshot local[ROBOT_LEG_NUM][MOTORS_PER_LEG])
+static void App_ApplyMotorCommandSnapshotToSendBuffer(AppMotorCmdSnapshot local[ROBOT_LEG_NUM][MOTORS_PER_LEG])
 {
     uint8_t leg_idx;
     uint8_t motor_idx;
@@ -674,7 +674,7 @@ void App_SetStandPose(const float stand_x_m_by_leg[ROBOT_LEG_NUM],
  * 后续若新增状态估计/任务管理，也建议从这里统一初始化。
  */
 void App_Robot_Init(void)
-{ 
+{
     // 直接把腿和485端口绑定
     RobotMap_Init();
     // 电机总线 DMA 接收先启动；真正发送由调度启动后的 motorsend 任务执行，避免初始化阶段阻塞。
@@ -682,13 +682,13 @@ void App_Robot_Init(void)
     MotorBus_Restart(LEG_FR);
     MotorBus_Restart(LEG_HL);
     MotorBus_Restart(LEG_HR);
-    //pid参数全部为0
+    // pid参数全部为0
     cmd_init();
     App_SetMainMotorCommandDefaults(0.0f, 0.0f, 0.0f, 0.0f, 1U, 1U);
     App_PublishMotorCommandSnapshot();
-    //这个是真pid系数了
-    //cmd_single_test_init();
-    //位控制参数初始化，频率、步长、抬脚高度等
+    // 这个是真pid系数了
+    // cmd_single_test_init();
+    // 位控制参数初始化，频率、步长、抬脚高度等
     Trajectory_InitDefault(&g_gait);
     /* 启动时也统一让 walk nominal 以 stand 位姿为基准。 */
     App_SyncWalkNominalFromStandPose();
@@ -728,6 +728,8 @@ void App_Robot_Loop1ms(void)
 
     /* 外控接管：仅在 STAND/WALK 模式下允许 PC policy 直接驱动关节。 */
     pc_policy_active = PCComm_IsPolicyControlAllowed();
+    /* 实验3：只测试 PCComm_Task1ms allowed 分支，不进入 policy 提前 return */
+    //pc_policy_active = 0U;
     if ((pc_policy_active != 0U) &&
         ((g_app_ctrl.mode == ROBOT_MODE_STAND) ||
          (g_app_ctrl.mode == ROBOT_MODE_WALK)))

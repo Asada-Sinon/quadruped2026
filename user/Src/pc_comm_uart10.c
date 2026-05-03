@@ -474,6 +474,11 @@ void PCComm_Task1ms(void)
     if (PCComm_IsPolicyControlAllowed() != 0U)
     {
         pccomm_rate_limit_qdes(g_latest_command.q_des);
+        /*
+         * 实验4：虽然允许接管，但不使用 PC 发来的 q_des，
+         * 仍然使用默认站姿目标做滤波。
+         */
+        //pccomm_rate_limit_qdes(g_joint_default_stand_rad);
     }
     else
     {
