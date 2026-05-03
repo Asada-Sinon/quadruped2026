@@ -69,6 +69,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     }
     if (huart->Instance == USART10)
     {
+        /* PC 通信 UART10 发送完成：释放 busy 标志。 */
         PCComm_OnUart10TxCplt();
         return;
     }
@@ -107,6 +108,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     }
     if (huart->Instance == USART10)
     {
+        /* PC 通信 UART10 接收完成：交给解析器并继续接收。 */
         PCComm_OnUart10RxCplt();
         return;
     }
@@ -153,6 +155,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
         return;
     }
     if(huart->Instance == USART10) {
+        /* PC 通信 UART10 异常：重新挂起接收，避免卡死。 */
         PCComm_StartReceive();
         return;
     }

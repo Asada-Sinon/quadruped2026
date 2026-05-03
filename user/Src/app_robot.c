@@ -103,8 +103,11 @@ float App_Get_Model_Joint_Angle(uint8_t leg_idx,
                                 uint8_t motor_idx,
                                 const M8010 *motor)
 {
+    /* 把 (腿序号, 关节序号) 映射到 URDF 顺序的一维关节索引。 */
     uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
+    /* 关节传动方向：把电机 PosRel 的符号统一到模型关节方向。 */
     float trans_dir = g_joint_transmission_sign[joint_idx];
+    /* 模型关节角 = 方向修正后的 PosRel + 上电零位偏置。 */
     return trans_dir * motor->motor_r.PosRel + g_joint_offset_rad[joint_idx];
 }
 // 上面函数的反算版本，模型关节角转电机相对角，输入是模型关节角，输出是电机相对角（已经考虑安装方向和零位偏置）。这个函数在 gait.c 的 Gait_UpdateTargetAngleFromFootTarget() 里被调用，用于把足端目标经过 IK 转成关节角后，再转成电机相对角发给电机。
@@ -112,8 +115,11 @@ static float App_Model_Joint_Angle_To_Motor_Rel(uint8_t leg_idx,
                                                 uint8_t motor_idx,
                                                 float joint_angle)
 {
+    /* 把 (腿序号, 关节序号) 映射到 URDF 顺序的一维关节索引。 */
     uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
+    /* 关节传动方向：把模型关节角反算回电机 PosRel。 */
     float trans_dir = g_joint_transmission_sign[joint_idx];
+    /* 电机相对角 = (模型角 - 零位偏置) / 传动方向。 */
     return (joint_angle - g_joint_offset_rad[joint_idx]) / trans_dir;
 }
 
@@ -468,16 +474,20 @@ void App_SetStandPose(const float stand_x_m_by_leg[ROBOT_LEG_NUM],
  * 后续若新增状态估计/任务管理，也建议从这里统一初始化。
  */
 void App_Robot_Init(void)
-{ // 电机参数初始化，485端口和电机绑定，初始化第一次，发送全空命令，先get到一次回传，拿到零位
+{ 
+    // 直接把腿和485端口绑定
+    RobotMap_Init();
+    // 电机参数初始化，485端口和电机绑定，初始化第一次，发送全空命令，先get到一次回传，拿到零位
     MotorBus_Restart(LEG_FL);
     MotorBus_Restart(LEG_FR);
     MotorBus_Restart(LEG_HL);
     MotorBus_Restart(LEG_HR);
+    //pid参数全部为0
     cmd_init();
-    // 直接把腿和485端口绑定
-    RobotMap_Init();
     send_data_all(legs);
+    //这个是真pid系数了
     //cmd_single_test_init();
+    //位控制参数初始化，频率、步长、抬脚高度等
     Trajectory_InitDefault(&g_gait);
     /* 启动时也统一让 walk nominal 以 stand 位姿为基准。 */
     App_SyncWalkNominalFromStandPose();
@@ -487,6 +497,7 @@ void App_Robot_Init(void)
     VOFA_JF_DMA_Init(&hvofa, &huart6);
     Teaching_Pendant_Restart();
     IMU_Restart();
+    /* 初始化 PC 通信模块，并启动 UART10 接收。 */
     PCComm_Init();
     PCComm_StartReceive();
 }
@@ -505,25 +516,33 @@ void App_Robot_Loop1ms(void)
     /* 计算本周期真实 dt，后续 12 路插值都使用这个时间步长。 */
     g_interp_dt_ms = app_get_real_dt_ms();
     float dt_s = g_interp_dt_ms / 1000.0f;
+    /* 记录上一拍是否由 PC policy 接管，用于外控退出时回退到 STAND。 */
     static uint8_t pc_policy_was_active = 0U;
+    /* 本拍 PC policy 是否满足接管条件。 */
     uint8_t pc_policy_active;
 
+    /* 1ms 更新 PC 通信状态机，并按 20ms 周期发送状态包。 */
     PCComm_Task1ms();
     PCComm_SendState20ms();
 
+    /* 外控接管：仅在 STAND/WALK 模式下允许 PC policy 直接驱动关节。 */
     pc_policy_active = PCComm_IsPolicyControlAllowed();
     if ((pc_policy_active != 0U) &&
         ((g_app_ctrl.mode == ROBOT_MODE_STAND) ||
          (g_app_ctrl.mode == ROBOT_MODE_WALK)))
     {
+        /* PC 端给的是 URDF 顺序的一维关节角数组。 */
         float q_des_urdf[J_NUM];
         PCComm_GetQDesUrdf(q_des_urdf);
+        /* 将一维关节角映射到 [腿][关节] 并下发到电机。 */
         App_Set_Model_Joint_Target_Angle(q_des_urdf);
         send_data_all(legs);
+        /* 标记本轮由 PC policy 接管，直接返回跳过本地状态机。 */
         pc_policy_was_active = 1U;
         return;
     }
 
+    /* PC policy 刚退出时，强制回到 STAND，避免保持旧的轨迹状态。 */
     if (pc_policy_was_active != 0U)
     {
         App_SetControlMode(ROBOT_MODE_STAND);
@@ -563,7 +582,6 @@ void App_Robot_Loop1ms(void)
         App_UpdateStandFootTarget();
         break;
     }
-
     // 四个腿根据足端位置，逆运动学设置关节位置
     Gait_UpdateTargetAngleFromFootTarget(Target_Angle);
     // 站立：电机插值平滑；行走/匍匐：直接跟踪 IK 输出，避免“轨迹 + 电机”双层平滑带来的滞后
@@ -689,6 +707,11 @@ float App_target_relative_to_absolute(float pos_rel,
     return pos_abs + dir * delta_rel * ROBOT_MOTOR_GEAR_RATIO;
 }
 // 所有电机平滑计算，算完直接给到cmd里面
+/*
+ * use_stand_interpolation:
+ * 1U -> STAND 模式保留五次插值平滑；
+ * 0U -> 外部关节角直接跟踪，不再叠加插值。
+ */
 static void App_all_motor_calculate_internal(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
                                              Leg leg[ROBOT_LEG_NUM],
                                              uint8_t use_stand_interpolation)
@@ -748,9 +771,14 @@ static void App_all_motor_calculate_internal(float target_angle[ROBOT_LEG_NUM][M
 void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
                              Leg leg[ROBOT_LEG_NUM])
 {
+    /* 保持历史行为：站立模式仍使用五次插值。 */
     App_all_motor_calculate_internal(target_angle, leg, 1U);
 }
 
+/*
+ * 将 URDF 顺序的一维关节角数组映射为 [腿][关节] 目标，
+ * 并直接下发到电机（不启用 STAND 插值）。
+ */
 void App_Set_Model_Joint_Target_Angle(const float q_des_urdf[J_NUM])
 {
     float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG];
@@ -766,7 +794,9 @@ void App_Set_Model_Joint_Target_Angle(const float q_des_urdf[J_NUM])
     {
         for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
         {
+            /* 每条腿的 3 个关节拼成 URDF 顺序的一维索引。 */
             uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
+            /* 把一维关节角写入 [腿][关节] 目标数组。 */
             target_angle[leg_idx][motor_idx] = q_des_urdf[joint_idx];
         }
     }
@@ -779,6 +809,7 @@ void App_Get_Model_Joint_Angles(float q_urdf_out[J_NUM])
     uint8_t leg_idx;
     uint8_t motor_idx;
 
+    /* 输出数组必须由调用者提供，顺序与 URDF 关节索引一致。 */
     if (q_urdf_out == 0)
     {
         return;
@@ -788,6 +819,7 @@ void App_Get_Model_Joint_Angles(float q_urdf_out[J_NUM])
     {
         for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
         {
+            /* 线性关节索引与当前电机对象一一对应。 */
             uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
             M8010 *motor = &legs[leg_idx].motors_peer_leg[motor_idx];
             q_urdf_out[joint_idx] = App_Get_Model_Joint_Angle(leg_idx, motor_idx, motor);
@@ -795,11 +827,15 @@ void App_Get_Model_Joint_Angles(float q_urdf_out[J_NUM])
     }
 }
 
+/*
+ * 读取各电机速度并转换成 URDF 顺序的关节角速度数组（rad/s）。
+ */
 void App_Get_Model_Joint_Velocities(float qd_urdf_out[J_NUM])
 {
     uint8_t leg_idx;
     uint8_t motor_idx;
 
+    /* 输出数组必须由调用者提供，顺序与 URDF 关节索引一致。 */
     if (qd_urdf_out == 0)
     {
         return;
@@ -809,9 +845,12 @@ void App_Get_Model_Joint_Velocities(float qd_urdf_out[J_NUM])
     {
         for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
         {
+            /* 线性关节索引与当前电机对象一一对应。 */
             uint8_t joint_idx = ROBOT_JOINT_INDEX(leg_idx, motor_idx);
             M8010 *motor = &legs[leg_idx].motors_peer_leg[motor_idx];
+            /* 电机速度 W(转子侧) -> 输出轴相对角速度。 */
             float pos_rel_vel = (motor->motor_r.W / ROBOT_MOTOR_GEAR_RATIO) * (float)motor->sign;
+            /* 再按模型关节方向修正为 URDF 关节角速度。 */
             qd_urdf_out[joint_idx] = g_joint_transmission_sign[joint_idx] * pos_rel_vel;
         }
     }

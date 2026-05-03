@@ -54,6 +54,8 @@
 osThreadId defaultTaskHandle;
 osThreadId myTask02Handle;
 osThreadId myTask03Handle;
+osThreadId myTask04Handle;
+osThreadId myTask05Handle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -64,6 +66,8 @@ osThreadId myTask03Handle;
 void motor(void const * argument);
 void vofa(void const * argument);
 void calculate(void const * argument);
+void motorsend(void const * argument);
+void pc(void const * argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -122,6 +126,14 @@ void MX_FREERTOS_Init(void) {
   osThreadDef(myTask03, calculate, osPriorityIdle, 0, 128);
   myTask03Handle = osThreadCreate(osThread(myTask03), NULL);
 
+  /* definition and creation of myTask04 */
+  osThreadDef(myTask04, motorsend, osPriorityIdle, 0, 128);
+  myTask04Handle = osThreadCreate(osThread(myTask04), NULL);
+
+  /* definition and creation of myTask05 */
+  osThreadDef(myTask05, pc, osPriorityIdle, 0, 128);
+  myTask05Handle = osThreadCreate(osThread(myTask05), NULL);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -140,24 +152,24 @@ void motor(void const * argument)
   /* USER CODE BEGIN motor */
   /*
    * vTaskDelayUntil 鐢ㄤ簬鈥滃浐瀹氬懆鏈熲?濅换鍔★細
-   * - xLastWakeTime锛氳褰曚笂娆″敜閱掓椂鍒?
+   * - xLastWakeTime锛氳?板綍涓婃?″敜閱掓椂鍒?
    * - xPeriodTicks锛氫换鍔″懆鏈燂紙杩欓噷鏄? 1ms锛?
    */
   //TickType_t xLastWakeTime;
   //const TickType_t xPeriodTicks = pdMS_TO_TICKS(1U);
 
-  /* 鍙傛暟鏈娇鐢紝鏄惧紡娑堥櫎鍛婅銆? */
+  /* 鍙傛暟鏈?浣跨敤锛屾樉寮忔秷闄ゅ憡璀︺?? */
   //(void)argument;
 
-  /* 鍚姩鍓嶅厛鎶撳彇褰撳墠 tick 浣滀负鍛ㄦ湡鍩哄噯銆? */
+  /* 鍚?鍔ㄥ墠鍏堟姄鍙栧綋鍓? tick 浣滀负鍛ㄦ湡鍩哄噯銆? */
   //xLastWakeTime = xTaskGetTickCount();
 
   /* Infinite loop */
   for (;;)
   {
-    // 瓒崇鍗曚綅鏄痬
+    // 瓒崇??鍗曚綅鏄痬
     App_Robot_Loop1ms();
-    /* 鍥哄畾 1ms 鍛ㄦ湡杩愯锛岃?屼笉鏄?滀粠褰撳墠鏃跺埢鍐嶅欢鏃? 1ms鈥濄?? */
+    /* 鍥哄畾 1ms 鍛ㄦ湡杩愯?岋紝??屼笉鏄???滀粠褰撳墠鏃跺埢鍐嶅欢鏃? 1ms鈥濄?? */
     //vTaskDelayUntil(&xLastWakeTime, xPeriodTicks);
     osDelay(1);
   }
@@ -197,10 +209,47 @@ void calculate(void const * argument)
   /* Infinite loop */
   for (;;)
   {
+    //不断通过正运动学解出来当前足端位置
     App_UpdateCurrentFootPosFromMotor(legs);
     osDelay(1);
   }
   /* USER CODE END calculate */
+}
+
+/* USER CODE BEGIN Header_motorsend */
+/**
+* @brief Function implementing the myTask04 thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_motorsend */
+void motorsend(void const * argument)
+{
+  /* USER CODE BEGIN motorsend */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END motorsend */
+}
+
+/* USER CODE BEGIN Header_pc */
+/**
+* @brief Function implementing the myTask05 thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_pc */
+void pc(void const * argument)
+{
+  /* USER CODE BEGIN pc */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END pc */
 }
 
 /* Private application code --------------------------------------------------*/
