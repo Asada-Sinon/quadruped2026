@@ -41,9 +41,17 @@ void App_Robot_Init(void);
 /*
  * 1ms 周期任务：
  * - 生成/刷新关节目标
- * - 执行一次总线轮询收发
+ * - 发布电机目标快照
+ * - 不直接执行电机总线发送，避免阻塞 UART10 状态包
  */
 void App_Robot_Loop1ms(void);
+/*
+ * 电机发送任务入口：
+ * - 由低优先级 motorsend 任务周期调用；
+ * - 内部会读取控制任务发布的电机命令快照，并调用 send_data_all()；
+ * - 不能从 App_Robot_Loop1ms()、中断或其他任务重复调用，避免电机总线重入。
+ */
+void App_Robot_MotorSendLoop(void);
 /* 调试波形发送接口（用于 VOFA 观察运行状态）。 */
 void App_vofa_Send(void);
 
@@ -93,6 +101,11 @@ void App_SetStandPose(const float stand_x_m_by_leg[ROBOT_LEG_NUM],
  */
 extern float Target_Angle[ROBOT_LEG_NUM][MOTORS_PER_LEG];
 
+/* motorsend 调试计数，便于在 Keil Watch 窗口确认发送任务是否独立运行。 */
+extern volatile uint32_t g_debug_motor_send_cost_ms;
+extern volatile uint32_t g_debug_motor_send_loop_count;
+extern volatile uint32_t g_debug_motor_snapshot_publish_count;
+
 /* 当前相对角请直接读取 leg[x].motors_peer_leg[y].motor_r.PosRel（单位 rad）。 */
 
 /*
@@ -119,7 +132,7 @@ float App_target_relative_to_absolute(float pos_rel,
                                       int sign);
 
 /*
- * 批量计算 12 个电机控制目标，并写入发送缓冲。
+ * 批量计算 12 个电机控制目标，并写入 legs[*].motor_s 目标字段。
  * - target_angle: 上层给出的 12 个目标角(rad)
  * - leg:          电机反馈容器（用于读取各电机 PosRel）
  *

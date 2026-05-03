@@ -60,6 +60,17 @@ typedef struct
     uint8_t walk_cmd_inited;
 } AppControlContext;
 
+typedef struct
+{
+    float Pos;
+    float W;
+    float T;
+    float K_P;
+    float K_W;
+    unsigned short mode;
+    unsigned short id;
+} AppMotorCmdSnapshot;
+
 static DiagonalCycloidGait g_gait;
 /* 应用层统一控制上下文，替代分散的全局标志位。 */
 AppControlContext g_app_ctrl =
@@ -98,6 +109,195 @@ static float g_interp_elapsed_ms[APP_MOTOR_COUNT] = {0};
 static float g_interp_duration_ms[APP_MOTOR_COUNT] = {0};
 /* 每个电机插值状态是否已初始化。 */
 static uint8_t g_interp_inited[APP_MOTOR_COUNT] = {0};
+/*
+ * 12 个主电机的发送目标快照。
+ * 控制任务只负责把刚算好的目标发布到这里；motorsend 任务只从这里取目标，
+ * 再刷新底层 cmd[] 并调用 send_data_all()。快照里只保存发送所需字段，
+ * 不复制 legs 整体，避免把 UART 句柄、GPIO、反馈数据等硬件状态混进任务间交接。
+ */
+static AppMotorCmdSnapshot g_motor_cmd_snapshot[ROBOT_LEG_NUM][MOTORS_PER_LEG] = {0};
+/* 快照发布序号，每次控制任务发布 12 路目标后递增，用于观察目标是否持续更新。 */
+static volatile uint32_t g_motor_cmd_snapshot_seq = 0U;
+/* motorsend 最近一次取走的快照序号，用于确认发送任务读到的是哪一版目标。 */
+static volatile uint32_t g_motor_cmd_snapshot_take_seq = 0U;
+/* 控制任务发布快照次数，Keil Watch 可观察，确认 App_Robot_Loop1ms() 未被电机发送拖慢。 */
+volatile uint32_t g_debug_motor_snapshot_publish_count = 0U;
+/* motorsend 任务执行发送循环次数，Keil Watch 可观察，确认只有独立发送任务在跑。 */
+volatile uint32_t g_debug_motor_send_loop_count = 0U;
+/* 最近一次 send_data_all() 耗时(ms)，用于判断电机回包是否正常、是否仍接近超时上限。 */
+volatile uint32_t g_debug_motor_send_cost_ms = 0U;
+
+/*
+ * 设置 12 个主电机的默认发送参数。
+ * 调用者：App_Robot_Init() 和状态切换入口，运行在控制任务/调度启动前上下文。
+ * 是否可重入：不可重入；它只改写 legs[*].motor_s 的发送目标字段，不做 UART 发送。
+ *
+ * 这些参数原先由 cmd_init()/cmd_init_2() 直接写入底层 cmd[]。解耦后，控制任务
+ * 只维护 legs[*].motor_s 里的“目标意图”，再通过快照交给 motorsend 刷新 cmd[]，
+ * 避免 send_data_all() 正在读取 cmd[] 时控制任务同时改写发送缓冲。
+ */
+static void App_SetMainMotorCommandDefaults(float T,
+                                            float W,
+                                            float K_P,
+                                            float K_W,
+                                            unsigned short mode,
+                                            uint8_t reset_pos)
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            M8010 *motor = &legs[leg_idx].motors_peer_leg[motor_idx];
+
+            motor->motor_s.mode = mode;
+            motor->motor_s.T = T;
+            motor->motor_s.W = W;
+            motor->motor_s.K_P = K_P;
+            motor->motor_s.K_W = K_W;
+            if (reset_pos != 0U)
+            {
+                motor->motor_s.Pos = 0.0f;
+            }
+        }
+    }
+}
+
+/*
+ * 发布电机命令快照。
+ * 调用者：控制任务 App_Robot_Loop1ms()，以及调度启动前的 App_Robot_Init() 初始化。
+ * 运行上下文：任务上下文/调度启动前；不可在中断里调用。
+ * 是否可重入：不可重入，只允许控制链路调用。
+ *
+ * 这里只把 legs[*].motor_s 中的 12 路主电机发送目标复制到 snapshot，不做 UART、
+ * DMA 或 send_data_all()。临界区只包住这次短内存复制和序号更新，绝不能把
+ * send_data_all() 放进临界区，因为 send_data_all() 最坏会等待十几个电机回包，
+ * 会阻塞约 65ms，并拖慢 PCComm_SendState20ms() 的 50Hz 状态包。
+ */
+static void App_PublishMotorCommandSnapshot(void)
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    taskENTER_CRITICAL();
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            const MotorCmd_t *motor_s = &legs[leg_idx].motors_peer_leg[motor_idx].motor_s;
+
+            g_motor_cmd_snapshot[leg_idx][motor_idx].Pos = motor_s->Pos;
+            g_motor_cmd_snapshot[leg_idx][motor_idx].W = motor_s->W;
+            g_motor_cmd_snapshot[leg_idx][motor_idx].T = motor_s->T;
+            g_motor_cmd_snapshot[leg_idx][motor_idx].K_P = motor_s->K_P;
+            g_motor_cmd_snapshot[leg_idx][motor_idx].K_W = motor_s->K_W;
+            g_motor_cmd_snapshot[leg_idx][motor_idx].mode = motor_s->mode;
+            g_motor_cmd_snapshot[leg_idx][motor_idx].id = motor_s->id;
+        }
+    }
+    g_motor_cmd_snapshot_seq++;
+    g_debug_motor_snapshot_publish_count++;
+    taskEXIT_CRITICAL();
+}
+
+/*
+ * 从全局快照复制到 motorsend 任务的本地缓冲。
+ * 调用者：App_Robot_MotorSendLoop()，也就是 motorsend 任务。
+ * 运行上下文：低优先级任务上下文；不可在中断里调用。
+ * 是否可重入：不可重入，只允许一个 motorsend 任务调用。
+ *
+ * 临界区只保护 snapshot -> local 的短复制，并记录取走的序号；这里不调用
+ * send_data_all()，也不调用 HAL_UART_Transmit_DMA()，避免长时间关中断或阻塞调度。
+ */
+static void App_CopyMotorCommandSnapshotToLocal(AppMotorCmdSnapshot local[ROBOT_LEG_NUM][MOTORS_PER_LEG])
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    if (local == 0)
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            local[leg_idx][motor_idx] = g_motor_cmd_snapshot[leg_idx][motor_idx];
+        }
+    }
+    g_motor_cmd_snapshot_take_seq = g_motor_cmd_snapshot_seq;
+    taskEXIT_CRITICAL();
+}
+
+/*
+ * 将本地快照应用到底层电机发送缓冲。
+ * 调用者：App_Robot_MotorSendLoop()，在调用 send_data_all() 之前执行。
+ * 运行上下文：motorsend 低优先级任务上下文；不可在中断里调用。
+ * 是否可重入：不可重入，只允许一个 motorsend 任务调用。
+ *
+ * 本工程当前的 send_data_all() 实际发送底层 cmd[]，不会读取 legs[*].motor_s。
+ * 为了避免控制任务和 motorsend 任务同时写 legs，控制任务独占维护 legs[*].motor_s，
+ * motorsend 只把快照写入 cmd[]。这里不覆盖 motor_r 反馈、不覆盖 UART 句柄、GPIO、
+ * sign 等硬件映射；额外 ID13 不放入本二维快照，仍由 M8010.c 内部现有逻辑处理。
+ */
+static void App_ApplyMotorCommandSnapshotToSendBuffer(const AppMotorCmdSnapshot local[ROBOT_LEG_NUM][MOTORS_PER_LEG])
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    if (local == 0)
+    {
+        return;
+    }
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            uint8_t cmd_idx = (uint8_t)(leg_idx * MOTORS_PER_LEG + motor_idx);
+            MotorCmd_t motor_s;
+
+            motor_s.Pos = local[leg_idx][motor_idx].Pos;
+            motor_s.W = local[leg_idx][motor_idx].W;
+            motor_s.T = local[leg_idx][motor_idx].T;
+            motor_s.K_P = local[leg_idx][motor_idx].K_P;
+            motor_s.K_W = local[leg_idx][motor_idx].K_W;
+            motor_s.mode = local[leg_idx][motor_idx].mode;
+            motor_s.id = local[leg_idx][motor_idx].id;
+            set_cmd_by_index(cmd_idx, &motor_s);
+        }
+    }
+}
+
+/*
+ * 电机发送任务唯一业务入口。
+ * 调用者：freertos.c 中低优先级 motorsend 任务。
+ * 运行上下文：任务上下文；不能在中断里调用，不能在 App_Robot_Loop1ms() 里调用。
+ * 是否可重入：不可重入；全工程只能保留这一条业务调用链进入 send_data_all()。
+ *
+ * send_data_all() 会逐个电机 DMA 发送并等待回包，电机不上电或回包异常时最坏约
+ * 13 * 5ms，因此该函数可能阻塞几十毫秒。它必须放在低于 motor 控制任务的
+ * motorsend 任务里：如果 motorsend 优先级高于控制任务，阻塞等待会抢占 1ms 控制循环，
+ * PCComm_SendState20ms() 也会重新被拖慢，状态包又会掉到十几 Hz。
+ */
+void App_Robot_MotorSendLoop(void)
+{
+    AppMotorCmdSnapshot local[ROBOT_LEG_NUM][MOTORS_PER_LEG];
+    uint32_t t0;
+
+    App_CopyMotorCommandSnapshotToLocal(local);
+    App_ApplyMotorCommandSnapshotToSendBuffer(local);
+
+    t0 = HAL_GetTick();
+    send_data_all(legs);
+    g_debug_motor_send_cost_ms = HAL_GetTick() - t0;
+    g_debug_motor_send_loop_count++;
+}
+
 // 物理世界中固定的上电位置并非0位，而是有一个偏置的，这个函数就是把这个偏置加上去，得到一个更符合机械定义的角度值，方便上层算法使用。
 float App_Get_Model_Joint_Angle(uint8_t leg_idx,
                                 uint8_t motor_idx,
@@ -298,10 +498,10 @@ static void App_HandleModeEntry(RobotControlMode mode)
     {
         /* 进入行走相关模式前先把轨迹中心对齐到当前 STAND 位姿。 */
         App_SyncWalkNominalFromStandPose();
-        /* 行走相关模式首次进入时设置电机参数，后续不重复发。 */
+        /* 行走相关模式首次进入时设置电机发送参数，后续不重复改写。 */
         if (g_app_ctrl.walk_cmd_inited == 0U)
         {
-            cmd_init_2();
+            App_SetMainMotorCommandDefaults(0.0f, 0.0f, 5.0f, 0.03f, 1U, 1U);
             g_app_ctrl.walk_cmd_inited = 1U;
         }
         return;
@@ -477,14 +677,15 @@ void App_Robot_Init(void)
 { 
     // 直接把腿和485端口绑定
     RobotMap_Init();
-    // 电机参数初始化，485端口和电机绑定，初始化第一次，发送全空命令，先get到一次回传，拿到零位
+    // 电机总线 DMA 接收先启动；真正发送由调度启动后的 motorsend 任务执行，避免初始化阶段阻塞。
     MotorBus_Restart(LEG_FL);
     MotorBus_Restart(LEG_FR);
     MotorBus_Restart(LEG_HL);
     MotorBus_Restart(LEG_HR);
     //pid参数全部为0
     cmd_init();
-    send_data_all(legs);
+    App_SetMainMotorCommandDefaults(0.0f, 0.0f, 0.0f, 0.0f, 1U, 1U);
+    App_PublishMotorCommandSnapshot();
     //这个是真pid系数了
     //cmd_single_test_init();
     //位控制参数初始化，频率、步长、抬脚高度等
@@ -534,9 +735,9 @@ void App_Robot_Loop1ms(void)
         /* PC 端给的是 URDF 顺序的一维关节角数组。 */
         float q_des_urdf[J_NUM];
         PCComm_GetQDesUrdf(q_des_urdf);
-        /* 将一维关节角映射到 [腿][关节] 并下发到电机。 */
+        /* 将一维关节角映射到 [腿][关节] 目标字段，再发布快照交给 motorsend 发送。 */
         App_Set_Model_Joint_Target_Angle(q_des_urdf);
-        send_data_all(legs);
+        App_PublishMotorCommandSnapshot();
         /* 标记本轮由 PC policy 接管，直接返回跳过本地状态机。 */
         pc_policy_was_active = 1U;
         return;
@@ -586,12 +787,19 @@ void App_Robot_Loop1ms(void)
     Gait_UpdateTargetAngleFromFootTarget(Target_Angle);
     // 站立：电机插值平滑；行走/匍匐：直接跟踪 IK 输出，避免“轨迹 + 电机”双层平滑带来的滞后
     App_all_motor_claculate(Target_Angle, legs);
-    /* 再统一下发本周期已经平滑后的 12 路位置命令。 */
-    send_data_all(legs);
+    /*
+     * 只发布本周期已经平滑后的 12 路目标，不在 1ms 控制任务里直接发送。
+     * send_data_all() 会等待电机回包，电机不上电时可能阻塞几十毫秒；若放在这里，
+     * PCComm_SendState20ms() 就会跟着掉频，UART10 状态包无法稳定保持 50Hz。
+     */
+    App_PublishMotorCommandSnapshot();
 }
 void App_Robot_Send_Loop(void)
 {
-    send_data_all(legs);
+    /*
+     * 历史调试入口保留为空：电机总线发送现在只能由 motorsend 任务通过
+     * App_Robot_MotorSendLoop() 进入，避免 VOFA/其他任务误调用造成 send_data_all() 重入。
+     */
 }
 float ch[VOFA_JF_MAX_CH] = {0};
 
@@ -706,7 +914,7 @@ float App_target_relative_to_absolute(float pos_rel,
     // return pos_abs + dir * delta_rel;
     return pos_abs + dir * delta_rel * ROBOT_MOTOR_GEAR_RATIO;
 }
-// 所有电机平滑计算，算完直接给到cmd里面
+// 所有电机平滑计算，算完写到 legs[*].motor_s，随后由快照交给 motorsend 刷新 cmd[]。
 /*
  * use_stand_interpolation:
  * 1U -> STAND 模式保留五次插值平滑；
@@ -762,8 +970,11 @@ static void App_all_motor_calculate_internal(float target_angle[ROBOT_LEG_NUM][M
                                                          motor->sign);
             /* 同步保存绝对角到电机对象，便于本地状态查看。 */
             motor->motor_s.Pos = target_abs;
-            /* 直接写入发送缓冲 cmd[]，保证 send_data_all 可直接发送。 */
-            set_cmd_pos_by_index(cmd_idx, target_abs);
+            /*
+             * 这里只更新控制任务拥有的目标字段，不再直接写底层 cmd[]。
+             * cmd[] 由 motorsend 任务在读取快照后统一刷新，避免发送任务和控制任务
+             * 同时改写发送缓冲。
+             */
         }
     }
 }
@@ -777,7 +988,8 @@ void App_all_motor_claculate(float target_angle[ROBOT_LEG_NUM][MOTORS_PER_LEG],
 
 /*
  * 将 URDF 顺序的一维关节角数组映射为 [腿][关节] 目标，
- * 并直接下发到电机（不启用 STAND 插值）。
+ * 并写入 legs[*].motor_s 目标字段（不启用 STAND 插值）。
+ * 真正的 UART/DMA 发送由 motorsend 任务读取快照后统一执行。
  */
 void App_Set_Model_Joint_Target_Angle(const float q_des_urdf[J_NUM])
 {

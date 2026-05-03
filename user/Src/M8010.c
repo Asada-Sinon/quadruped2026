@@ -393,6 +393,29 @@ void set_cmd_pos_by_index(uint8_t cmd_idx, float pos)
 	modify_data(&cmd[cmd_idx]);
 }
 
+void set_cmd_by_index(uint8_t cmd_idx, const MotorCmd_t *motor_s)
+{
+	if ((cmd_idx >= (ROBOT_LEG_NUM * MOTORS_PER_LEG)) ||
+		(motor_s == NULL))
+	{
+		return;
+	}
+
+	/*
+	 * 只复制发送命令字段，不接触反馈、串口句柄、方向引脚或安装方向。
+	 * motorsend 任务在调用 send_data_all() 之前用它刷新 cmd[]，这样控制任务
+	 * 只需要发布快照，不再直接改写底层发送缓冲。
+	 */
+	cmd[cmd_idx].id = motor_s->id;
+	cmd[cmd_idx].mode = motor_s->mode;
+	cmd[cmd_idx].T = motor_s->T;
+	cmd[cmd_idx].W = motor_s->W;
+	cmd[cmd_idx].Pos = motor_s->Pos;
+	cmd[cmd_idx].K_P = motor_s->K_P;
+	cmd[cmd_idx].K_W = motor_s->K_W;
+	modify_data(&cmd[cmd_idx]);
+}
+
 void send_data_all(Leg *leg)
 {
 	for (int leg_idx = 0; leg_idx < ROBOT_LEG_NUM; leg_idx++)

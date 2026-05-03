@@ -151,26 +151,18 @@ void motor(void const * argument)
 {
   /* USER CODE BEGIN motor */
   /*
-   * vTaskDelayUntil 鐢ㄤ簬鈥滃浐瀹氬懆鏈熲?濅换鍔★細
-   * - xLastWakeTime锛氳?板綍涓婃?″敜閱掓椂鍒?
-   * - xPeriodTicks锛氫换鍔″懆鏈燂紙杩欓噷鏄? 1ms锛?
+   * motor 是 1ms 控制任务，只做 PC 通信状态机、状态包节拍、状态机、
+   * 轨迹/IK/目标角计算和快照发布，不直接调用 send_data_all()。
+   * 当前 FreeRTOSConfig.h 里 INCLUDE_vTaskDelayUntil=0，因此这里先保留
+   * CMSIS 的 osDelay(1)；如果后续在 CubeMX 里启用 vTaskDelayUntil，
+   * 可以再切到固定唤醒相位的 vTaskDelayUntil()。
    */
-  //TickType_t xLastWakeTime;
-  //const TickType_t xPeriodTicks = pdMS_TO_TICKS(1U);
-
-  /* 鍙傛暟鏈?浣跨敤锛屾樉寮忔秷闄ゅ憡璀︺?? */
-  //(void)argument;
-
-  /* 鍚?鍔ㄥ墠鍏堟姄鍙栧綋鍓? tick 浣滀负鍛ㄦ湡鍩哄噯銆? */
-  //xLastWakeTime = xTaskGetTickCount();
+  (void)argument;
 
   /* Infinite loop */
   for (;;)
   {
-    // 瓒崇??鍗曚綅鏄痬
     App_Robot_Loop1ms();
-    /* 鍥哄畾 1ms 鍛ㄦ湡杩愯?岋紝??屼笉鏄???滀粠褰撳墠鏃跺埢鍐嶅欢鏃? 1ms鈥濄?? */
-    //vTaskDelayUntil(&xLastWakeTime, xPeriodTicks);
     osDelay(1);
   }
   /* USER CODE END motor */
@@ -226,10 +218,18 @@ void calculate(void const * argument)
 void motorsend(void const * argument)
 {
   /* USER CODE BEGIN motorsend */
+  /*
+   * motorsend 是唯一允许进入 App_Robot_MotorSendLoop()/send_data_all() 的任务。
+   * 发送函数会等待 12 个主电机和额外 ID13 的回包，电机不上电时可能阻塞约 65ms，
+   * 所以本任务周期先设为 5ms，且优先级必须低于 motor 控制任务，不能抢占 1ms 控制链路。
+   */
+  (void)argument;
+
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    App_Robot_MotorSendLoop();
+    osDelay(5);
   }
   /* USER CODE END motorsend */
 }
@@ -244,6 +244,12 @@ void motorsend(void const * argument)
 void pc(void const * argument)
 {
   /* USER CODE BEGIN pc */
+  /*
+   * PCComm_Task1ms() 和 PCComm_SendState20ms() 已经在 App_Robot_Loop1ms() 中执行。
+   * 这个低优先级 pc 任务暂不重复发送 UART10 状态包，避免 g_tx_busy 状态被多任务交叉触发。
+   */
+  (void)argument;
+
   /* Infinite loop */
   for(;;)
   {

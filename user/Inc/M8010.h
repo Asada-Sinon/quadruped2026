@@ -181,6 +181,16 @@ extern float g_motor13_target_kp;
  * 这样 send_data_all 下一次发送时就会用最新位置。
  */
 void set_cmd_pos_by_index(uint8_t cmd_idx, float pos);
+/*
+ * 按线性编号(0~11)写入某个主电机的完整发送命令：
+ * 1) 同步 id/mode/T/W/Pos/K_P/K_W 这些浮点控制目标；
+ * 2) 立即调用 modify_data() 重新打包 cmd[cmd_idx] 的协议帧。
+ *
+ * 该接口只负责准备发送缓冲，不做 UART/DMA 发送；当前业务层只允许
+ * motorsend 任务在 App_Robot_MotorSendLoop() 中调用它，避免控制任务和
+ * 电机发送任务同时改写 cmd[]。
+ */
+void set_cmd_by_index(uint8_t cmd_idx, const MotorCmd_t *motor_s);
 void cmd_init_2(void);
 
 /* 启动/重启指定 485 口（按腿索引）的 DMA 接收。 */
