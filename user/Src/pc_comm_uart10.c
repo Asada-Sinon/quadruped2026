@@ -90,7 +90,7 @@ static uint16_t g_rx_index = 0U;
  * g_pending_tick_ms: 指令到达时间戳；
  * g_last_command_tick_ms: 最后一次生效指令的时间戳。
  */
-static PCCommRuntimeCommand g_latest_command;
+PCCommRuntimeCommand g_latest_command;//这个是电脑发过来解析后的原始数据
 static PCCommRuntimeCommand g_pending_command;
 static volatile uint8_t g_pending_ready = 0U;
 static volatile uint32_t g_pending_tick_ms = 0U;
@@ -127,7 +127,7 @@ volatile uint32_t g_debug_pc_stand_rate_qdes_count = 0U;
  * g_attitude_safe: 姿态是否安全（roll/pitch 未超限）；
  * g_fault_code: 当前故障码（急停/姿态超限等）。
  */
-static float g_q_des_filtered[J_NUM];
+float g_q_des_filtered[J_NUM];//过了滤波的电脑发送关节角
 static uint8_t g_estop = 0U;
 static uint8_t g_attitude_safe = 1U;
 static uint8_t g_fault_code = PC_COMM_FAULT_NONE;
