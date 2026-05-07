@@ -109,6 +109,8 @@ static float g_interp_elapsed_ms[APP_MOTOR_COUNT] = {0};
 static float g_interp_duration_ms[APP_MOTOR_COUNT] = {0};
 /* 每个电机插值状态是否已初始化。 */
 static uint8_t g_interp_inited[APP_MOTOR_COUNT] = {0};
+/* 首次全回传后再启用非零 Kp/Kw。 */
+static uint8_t g_kpkw_armed = 0U;
 /*
  * 12 个主电机的发送目标快照。
  * 控制任务只负责把刚算好的目标发布到这里；motorsend 任务只从这里取目标，
@@ -520,9 +522,9 @@ static void App_HandleModeEntry(RobotControlMode mode)
         /* 进入行走相关模式前先把轨迹中心对齐到当前 STAND 位姿。 */
         App_SyncWalkNominalFromStandPose();
         /* 行走相关模式首次进入时设置电机发送参数，后续不重复改写。 */
-        if (g_app_ctrl.walk_cmd_inited == 0U)
+        if ((g_app_ctrl.walk_cmd_inited == 0U) && (g_kpkw_armed != 0U))
         {
-            App_SetMainMotorCommandDefaults(0.0f, 0.0f, 5.0f, 0.03f, 1U, 1U);
+            App_SetMainMotorCommandDefaults(0.0f, 0.0f, 0.2f, 0.0f, 1U, 1U);
             g_app_ctrl.walk_cmd_inited = 1U;
         }
         return;
@@ -708,6 +710,7 @@ void App_Robot_Init(void)
     App_SetMainMotorCommandDefaults(0.0f, 0.0f, 0.0f, 0.0f, 1U, 1U);
     App_PublishMotorCommandSnapshot();
     // 这个是真pid系数了
+    //cmd_init_2();
     // cmd_single_test_init();
     // 位控制参数初始化，频率、步长、抬脚高度等
     Trajectory_InitDefault(&g_gait);
@@ -746,6 +749,13 @@ void App_Robot_Loop1ms(void)
     /* 1ms 更新 PC 通信状态机，并按 20ms 周期发送状态包。 */
     PCComm_Task1ms();
     PCComm_SendState20ms();
+
+    /* 首次全回传后再把 Kp/Kw 提升到保守值，避免首包发疯。 */
+    if ((g_kpkw_armed == 0U) && (App_AllMotorsFeedbackValid() != 0U))
+    {
+        App_SetMainMotorCommandDefaults(0.0f, 0.0f, 2.0f, 0.01f, 1U, 0U);
+        g_kpkw_armed = 1U;
+    }
 
     /* 外控接管：仅在 STAND/WALK 模式下允许 PC policy 直接驱动关节。 */
     pc_policy_active = PCComm_IsPolicyControlAllowed();
@@ -825,16 +835,18 @@ void App_Robot_Send_Loop(void)
      */
 }
 float ch[VOFA_JF_MAX_CH] = {0};
-
 void App_vofa_Send(void)
 {
+    float q_des[J_NUM];
+    uint8_t i;
 
-    ch[0] += 0.1f;
-    ch[1] += 0.2f;
-    ch[2] += 0.3f;
-    ch[3] += 0.4f;
+    PCComm_GetLatestQDesUrdf(q_des);
+    for (i = 0U; i < (uint8_t)J_NUM; i++)
+    {
+        ch[i] = q_des[i];
+    }
 
-    VOFA_JF_DMA_Send(&hvofa, ch, 16);
+    VOFA_JF_DMA_Send(&hvofa, ch, (uint16_t)J_NUM);
 }
 // 单电机平滑计算
 float App_motor_angle_calculate(float target_angle, float pos_rel)

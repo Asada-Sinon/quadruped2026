@@ -117,6 +117,8 @@ uint8_t PCComm_GetFault(void);
 uint8_t PCComm_IsPolicyControlAllowed(void);
 /* 复制滤波后的目标关节角（URDF 顺序）到输出数组。 */
 void PCComm_GetQDesUrdf(float q_des_out[J_NUM]);
+/* 复制最新 PC 原始目标关节角（URDF 顺序）到输出数组。 */
+void PCComm_GetLatestQDesUrdf(float q_des_out[J_NUM]);
 
 /* 串口逐字节解析入口：喂入 1 个接收字节。 */
 void PCComm_OnUart10RxByte(uint8_t byte);

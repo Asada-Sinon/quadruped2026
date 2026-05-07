@@ -88,13 +88,15 @@ static uint16_t g_rx_index = 0U;
  * g_latest_command: 任务态真正生效的最新指令；
  * g_pending_ready: ISR -> 任务态的“新指令就绪”标志；
  * g_pending_tick_ms: 指令到达时间戳；
- * g_last_command_tick_ms: 最后一次生效指令的时间戳。
+ * g_last_command_tick_ms: 最后一次生效指令的时间戳；
+ * g_command_ever_received: 是否曾收到过合法 PC 指令（ISR 中置 1，初始化清零）。
  */
 PCCommRuntimeCommand g_latest_command;//这个是电脑发过来解析后的原始数据
 static PCCommRuntimeCommand g_pending_command;
 static volatile uint8_t g_pending_ready = 0U;
 static volatile uint32_t g_pending_tick_ms = 0U;
 static uint32_t g_last_command_tick_ms = 0U;
+static uint8_t g_command_ever_received = 0U;
 
 /*
  * PC 命令接收调试计数：ISR 中通过帧头、CRC、字段范围和安全校验后，
@@ -280,6 +282,7 @@ static void pccomm_accept_command_from_isr(const JointCommandPacket *pkt)
 
     g_pending_tick_ms = HAL_GetTick();
     g_pending_ready = 1U;
+    g_command_ever_received = 1U;
     g_debug_pc_cmd_accept_count++;
 }
 
@@ -523,6 +526,13 @@ void PCComm_Init(void)
      * g_latest_command / g_pending_command 是自然对齐的运行时缓存，
      * 不再是 JointCommandPacket，因此没有 head/crc 字段。帧头和 CRC
      * 只属于 UART 线协议解析阶段，不能进入长期控制状态。
+     *
+     * 关键安全设计：
+     * - g_latest_command.q_des / g_pending_command.q_des 保持 memset 的零值，
+     *   不预填默认站姿。这样在 Keil Watch 窗口可以直观确认"尚未收到 PC 指令"。
+     * - g_q_des_filtered 仍初始化为默认站姿，保证未接管时关节滤波目标安全。
+     * - g_command_ever_received 清零：只有 ISR 收到 CRC 校验通过的帧后才置 1，
+     *   杜绝上电/断连后误入 policy 接管。
      */
     g_latest_command.tick_ms = 0U;
     g_latest_command.enable = 0U;
@@ -546,6 +556,7 @@ void PCComm_Init(void)
     g_estop = 0U;
     g_attitude_safe = 1U;
     g_fault_code = PC_COMM_FAULT_NONE;
+    g_command_ever_received = 0U;
     g_debug_pc_cmd_accept_count = 0U;
     g_debug_pc_cmd_take_count = 0U;
     g_debug_pc_allowed_rate_qdes_count = 0U;
@@ -563,6 +574,15 @@ void PCComm_Task1ms(void)
 {
     pccomm_take_pending_command();
     pccomm_update_attitude_safety();
+
+    /*
+     * 指令超时后显式清零 enable，避免 g_latest_command.enable 残留在 1
+     * 导致下一次莫名进入 policy 接管（belt-and-suspenders）。
+     */
+    if (PCComm_IsCommandFresh() == 0U)
+    {
+        g_latest_command.enable = 0U;
+    }
 
     if (PCComm_IsPolicyControlAllowed() != 0U)
     {
@@ -676,6 +696,11 @@ uint8_t PCComm_GetFault(void)
 /* 判断是否允许 PC policy 接管控制（多重安全门限）。 */
 uint8_t PCComm_IsPolicyControlAllowed(void)
 {
+    /* 从未收到过合法 PC 指令：直接禁止，杜绝上电/断连后误入接管。 */
+    if (g_command_ever_received == 0U)
+    {
+        return 0U;
+    }
     if (g_estop != 0U)
     {
         return 0U;
