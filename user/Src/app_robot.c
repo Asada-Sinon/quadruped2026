@@ -459,6 +459,27 @@ static void App_ResetAllInterpolationState(void)
     }
 }
 
+/* 判断 12 个主电机是否都已收到有效回传。 */
+static uint8_t App_AllMotorsFeedbackValid(void)
+{
+    uint8_t leg_idx;
+    uint8_t motor_idx;
+
+    for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+    {
+        for (motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
+        {
+            const M8010 *motor = &legs[leg_idx].motors_peer_leg[motor_idx];
+            if ((motor->motor_r.PosZeroInited == 0U) || (motor->motor_r.correct == 0U))
+            {
+                return 0U;
+            }
+        }
+    }
+
+    return 1U;
+}
+
 /*
  * 把步态名义点同步到当前站立位姿：
  * 这样从 STAND 切到 WALK 时，轨迹中心不再使用 trajectory.c 里的固定默认值，

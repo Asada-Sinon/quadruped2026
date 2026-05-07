@@ -28,7 +28,7 @@
 /* 调试开关：ASCII hello 测试 / 假状态数据测试。 */
 #define PC_COMM_ASCII_HELLO_TEST 0U
 #define PC_COMM_FAKE_STATE_TEST 0U
-
+float volecity_cmd[3] = {0.0f, 0.0f, 0.0f};
 /*
  * PC 侧命令的运行时缓存。
  *
@@ -443,9 +443,9 @@ static void pccomm_fill_state_packet(RobotStatePacket *pkt)
     pccomm_fill_projected_gravity(pkt->projected_gravity);
 
     /* TODO: 后续补充当前有效的 vx/vy/偏航角速度指令。 */
-    pkt->cmd[0] = 0.0f;
-    pkt->cmd[1] = 0.0f;
-    pkt->cmd[2] = 0.0f;
+    pkt->cmd[0] = volecity_cmd[0];
+    pkt->cmd[1] = volecity_cmd[1];
+    pkt->cmd[2] = volecity_cmd[2];
 
 #if PC_COMM_FAKE_STATE_TEST
     for (i = 0U; i < (uint8_t)J_NUM; i++)
@@ -717,6 +717,29 @@ void PCComm_GetQDesUrdf(float q_des_out[J_NUM])
     for (i = 0U; i < (uint8_t)J_NUM; i++)
     {
         q_des_out[i] = g_q_des_filtered[i];
+    }
+}
+
+/* 复制最新 PC 原始目标关节角到输出数组（URDF 顺序）。 */
+void PCComm_GetLatestQDesUrdf(float q_des_out[J_NUM])
+{
+    uint8_t i;
+    uint32_t primask;
+
+    if (q_des_out == 0)
+    {
+        return;
+    }
+
+    primask = __get_PRIMASK();
+    __disable_irq();
+    for (i = 0U; i < (uint8_t)J_NUM; i++)
+    {
+        q_des_out[i] = g_latest_command.q_des[i];
+    }
+    if (primask == 0U)
+    {
+        __enable_irq();
     }
 }
 
