@@ -111,6 +111,8 @@ static float g_interp_duration_ms[APP_MOTOR_COUNT] = {0};
 static uint8_t g_interp_inited[APP_MOTOR_COUNT] = {0};
 /* 首次全回传后再启用非零 Kp/Kw。 */
 static uint8_t g_kpkw_armed = 0U;
+/* 诊断：当前有多少个电机已完成有效回传（PosZeroInited && correct）。 */
+volatile uint8_t g_debug_motor_feedback_ok_count = 0U;
 /*
  * 12 个主电机的发送目标快照。
  * 控制任务只负责把刚算好的目标发布到这里；motorsend 任务只从这里取目标，
@@ -466,6 +468,7 @@ static uint8_t App_AllMotorsFeedbackValid(void)
 {
     uint8_t leg_idx;
     uint8_t motor_idx;
+    uint8_t ok_count = 0U;
 
     for (leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
     {
@@ -474,12 +477,16 @@ static uint8_t App_AllMotorsFeedbackValid(void)
             const M8010 *motor = &legs[leg_idx].motors_peer_leg[motor_idx];
             if ((motor->motor_r.PosZeroInited == 0U) || (motor->motor_r.correct == 0U))
             {
-                return 0U;
+                continue;
             }
+            ok_count++;
         }
     }
 
-    return 1U;
+    /* 诊断：Keil Watch 可观察当前有多少个电机回传有效。 */
+    g_debug_motor_feedback_ok_count = ok_count;
+
+    return (ok_count >= APP_MOTOR_COUNT) ? 1U : 0U;
 }
 
 /*
@@ -754,6 +761,11 @@ void App_Robot_Loop1ms(void)
     if ((g_kpkw_armed == 0U) && (App_AllMotorsFeedbackValid() != 0U))
     {
         App_SetMainMotorCommandDefaults(0.0f, 0.0f, 2.0f, 0.01f, 1U, 0U);
+        /*
+         * 使能瞬间重置插值状态：此前电机 Kp=0，插值可能已累积很久，
+         * 这里从当前真实反馈角重新起一段插值，杜绝瞬移。
+         */
+        App_ResetAllInterpolationState();
         g_kpkw_armed = 1U;
     }
 
@@ -981,10 +993,23 @@ static void App_all_motor_calculate_internal(float target_angle[ROBOT_LEG_NUM][M
             current_model_angle = App_Get_Model_Joint_Angle(leg_idx, motor_idx, motor);
             if ((use_stand_interpolation != 0U) && (g_app_ctrl.mode == ROBOT_MODE_STAND))
             {
-                /* 站立模式保留关节插值：直接给终点角时，用五次曲线减少瞬时冲击。 */
-                g_interp_ctx_idx = cmd_idx;
-                control_model_angle = App_motor_angle_calculate(target_angle[leg_idx][motor_idx],
-                                                                current_model_angle);
+                /*
+                 * 电机未使能 (Kp=0) 时冻结插值推进，防止目标不断累积；
+                 * 使能瞬间 App_ResetAllInterpolationState() 会从当前反馈角重起。
+                 */
+                if (g_kpkw_armed != 0U)
+                {
+                    g_interp_ctx_idx = cmd_idx;
+                    control_model_angle = App_motor_angle_calculate(target_angle[leg_idx][motor_idx],
+                                                                    current_model_angle);
+                }
+                else
+                {
+                    /* 电机未使能：直接保持当前模型角，不推进插值时间。 */
+                    control_model_angle = current_model_angle;
+                    /* 同时重置该电机的插值状态，确保使能后从当前角起算。 */
+                    g_interp_inited[cmd_idx] = 0U;
+                }
             }
             else
             {

@@ -20,6 +20,7 @@
 
 /* 关节目标滤波与安全阈值参数。 */
 #define PC_COMM_MAX_DQ_PER_1MS 0.0015f
+#define PC_COMM_LPF_ALPHA 0.03f  /* 一阶低通 α，fc≈4.8Hz @1ms，对 ±0.05rad 噪声衰减约 10x */
 #define PC_COMM_ATTITUDE_LIMIT_DEG 30.0f
 #define PC_COMM_DEG_TO_RAD 0.01745329251994329577f
 #define PC_COMM_FAULT_NONE 0U
@@ -130,6 +131,13 @@ volatile uint32_t g_debug_pc_stand_rate_qdes_count = 0U;
  * g_fault_code: 当前故障码（急停/姿态超限等）。
  */
 float g_q_des_filtered[J_NUM];//过了滤波的电脑发送关节角
+/*
+ * 一阶低通滤波器状态（PC policy 下发目标的内层平滑）。
+ * g_q_des_lpf_state[j]: 对 g_latest_command.q_des[j] 做 IIR 滤波后的记忆值；
+ * g_q_des_lpf_inited: 首次收到指令时直接装载，避免从零值长斜坡。
+ */
+static float g_q_des_lpf_state[J_NUM];
+static uint8_t g_q_des_lpf_inited = 0U;
 static uint8_t g_estop = 0U;
 static uint8_t g_attitude_safe = 1U;
 static uint8_t g_fault_code = PC_COMM_FAULT_NONE;
@@ -546,6 +554,7 @@ void PCComm_Init(void)
         g_latest_command.q_des[i] = g_joint_default_stand_rad[i];
         g_pending_command.q_des[i] = g_joint_default_stand_rad[i];
         g_q_des_filtered[i] = g_joint_default_stand_rad[i];
+        g_q_des_lpf_state[i] = g_joint_default_stand_rad[i];
     }
 
     g_pending_ready = 0U;
@@ -557,6 +566,7 @@ void PCComm_Init(void)
     g_attitude_safe = 1U;
     g_fault_code = PC_COMM_FAULT_NONE;
     g_command_ever_received = 0U;
+    g_q_des_lpf_inited = 0U;
     g_debug_pc_cmd_accept_count = 0U;
     g_debug_pc_cmd_take_count = 0U;
     g_debug_pc_allowed_rate_qdes_count = 0U;
@@ -587,14 +597,32 @@ void PCComm_Task1ms(void)
     if (PCComm_IsPolicyControlAllowed() != 0U)
     {
         /*
-         * enable=1 时会进入这里。这里传入的是自然对齐的
+         * 一阶低通滤波：对 PC 下发的 q_des 做 IIR 平滑，
+         * 衰减 ±0.05rad 高频噪声（约 10x），避免电机高频抖动。
+         * enable=1 时会进入这里。传入的是自然对齐的
          * PCCommRuntimeCommand.q_des，不再是 packed JointCommandPacket.q_des。
-         * 这正好解释此前现象：enable=0 时走默认站姿所以正常；enable=1 时
-         * 读取 packed 缓存的 q_des 才可能触发非对齐访问；实验4改用默认站姿后
-         * 恢复 49~50Hz，也说明故障集中在 packed q_des 的运行时访问路径。
          */
+        uint8_t k;
+        if (g_q_des_lpf_inited == 0U)
+        {
+            for (k = 0U; k < (uint8_t)J_NUM; k++)
+            {
+                g_q_des_lpf_state[k] = g_latest_command.q_des[k];
+            }
+            g_q_des_lpf_inited = 1U;
+        }
+        else
+        {
+            const float alpha = PC_COMM_LPF_ALPHA;
+            const float one_minus_alpha = 1.0f - alpha;
+            for (k = 0U; k < (uint8_t)J_NUM; k++)
+            {
+                g_q_des_lpf_state[k] = alpha * g_latest_command.q_des[k]
+                                       + one_minus_alpha * g_q_des_lpf_state[k];
+            }
+        }
         g_debug_pc_allowed_rate_qdes_count++;
-        pccomm_rate_limit_qdes(g_latest_command.q_des);
+        pccomm_rate_limit_qdes(g_q_des_lpf_state);
     }
     else
     {
