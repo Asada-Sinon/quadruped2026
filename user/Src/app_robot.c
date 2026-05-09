@@ -760,7 +760,7 @@ void App_Robot_Loop1ms(void)
     /* 首次全回传后再把 Kp/Kw 提升到保守值，避免首包发疯。 */
     if ((g_kpkw_armed == 0U) && (App_AllMotorsFeedbackValid() != 0U))
     {
-        App_SetMainMotorCommandDefaults(0.0f, 0.0f, 2.0f, 0.01f, 1U, 0U);
+        App_SetMainMotorCommandDefaults(0.0f, 0.0f, 3.15f, 0.06f, 1U, 0U);
         /*
          * 使能瞬间重置插值状态：此前电机 Kp=0，插值可能已累积很久，
          * 这里从当前真实反馈角重新起一段插值，杜绝瞬移。
