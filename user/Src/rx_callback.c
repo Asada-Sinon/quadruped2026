@@ -5,6 +5,37 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "pc_comm_uart10.h"
+
+static uint8_t RxCallback_GetMotorLegIndex(const UART_HandleTypeDef *huart, uint8_t *leg_idx)
+{
+    if ((huart == NULL) || (leg_idx == NULL))
+    {
+        return 0U;
+    }
+
+    if (huart->Instance == UART9)
+    {
+        *leg_idx = 0U;
+        return 1U;
+    }
+    if (huart->Instance == USART3)
+    {
+        *leg_idx = 1U;
+        return 1U;
+    }
+    if (huart->Instance == USART2)
+    {
+        *leg_idx = 2U;
+        return 1U;
+    }
+    if (huart->Instance == UART7)
+    {
+        *leg_idx = 3U;
+        return 1U;
+    }
+
+    return 0U;
+}
 /*
  * UART DMA 接收完成回调。
  * 这里只处理 USART1 手柄数据。
@@ -38,38 +69,20 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart , uint16_t Size)
  */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
+    uint8_t leg_idx;
+
     if (huart == NULL)
     {
         return;
     }
 
-    if (huart->Instance == UART9)
+    if (RxCallback_GetMotorLegIndex(huart, &leg_idx) != 0U)
     {
-        //左前腿三个电机
-        MotorBus_Restart(0U);
-        return;
-    }
-    if (huart->Instance == USART3)
-    {
-        //右前腿三个电机
-        MotorBus_Restart(1U);
-        return;
-    }
-    if (huart->Instance == USART2)
-    {
-        //左后腿三个电机
-        MotorBus_Restart(2U);
-        return;
-    }
-    if (huart->Instance == UART7)
-    {
-        //右后腿三个电机
-        MotorBus_Restart(3U);
+        MotorBus_Restart(leg_idx);
         return;
     }
     if (huart->Instance == USART10)
     {
-        /* PC 通信 UART10 发送完成：释放 busy 标志。 */
         PCComm_OnUart10TxCplt();
         return;
     }
@@ -81,34 +94,20 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
+    uint8_t leg_idx;
+
     if (huart == NULL)
     {
         return;
     }
 
-    if (huart->Instance == UART9)
+    if (RxCallback_GetMotorLegIndex(huart, &leg_idx) != 0U)
     {
-        MotorBus_Process(0U, sizeof(RIS_MotorData_t));
-        return;
-    }
-    if (huart->Instance == USART3)
-    {
-        MotorBus_Process(1U, sizeof(RIS_MotorData_t));
-        return;
-    }
-    if (huart->Instance == USART2)
-    {
-        MotorBus_Process(2U, sizeof(RIS_MotorData_t));
-        return;
-    }
-    if (huart->Instance == UART7)
-    {
-        MotorBus_Process(3U, sizeof(RIS_MotorData_t));
+        MotorBus_Process(leg_idx, sizeof(RIS_MotorData_t));
         return;
     }
     if (huart->Instance == USART10)
     {
-        /* PC 通信 UART10 接收完成：交给解析器并继续接收。 */
         PCComm_OnUart10RxCplt();
         return;
     }
@@ -120,42 +119,34 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
  */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-	UBaseType_t irq_mask;
+    UBaseType_t irq_mask;
+    uint8_t leg_idx;
+
     if (huart == NULL)
     {
         return;
     }
 
-    if(huart->Instance == USART1) {
-        /* ISR 场景下使用 FreeRTOS 中断临界区，保护共享缓冲区访问。 */
+    if (huart->Instance == USART1)
+    {
         irq_mask = taskENTER_CRITICAL_FROM_ISR();
         Teaching_Pendant_Restart();
         HT10A_process(Teaching_Pendant_buffer);
         taskEXIT_CRITICAL_FROM_ISR(irq_mask);
         return;
     }
-    if(huart->Instance == UART8) {
+    if (huart->Instance == UART8)
+    {
         IMU_Restart();
         return;
     }
-    if(huart->Instance == UART9) {
-        MotorBus_Restart(0U);
+    if (RxCallback_GetMotorLegIndex(huart, &leg_idx) != 0U)
+    {
+        MotorBus_Restart(leg_idx);
         return;
     }
-    if(huart->Instance == USART3) {
-        MotorBus_Restart(1U);
-        return;
-    }
-    if(huart->Instance == USART2) {
-        MotorBus_Restart(2U);
-        return;
-    }
-    if(huart->Instance == UART7) {
-        MotorBus_Restart(3U);
-        return;
-    }
-    if(huart->Instance == USART10) {
-        /* PC 通信 UART10 异常：重新挂起接收，避免卡死。 */
+    if (huart->Instance == USART10)
+    {
         PCComm_StartReceive();
         return;
     }

@@ -6,6 +6,7 @@
 #include "robot_map.h"
 #define M8010_TWO_PI 6.28318530718f
 #define M8010_DMA_WAIT_TIMEOUT_MS 5U
+#define M8010_MAIN_MOTOR_COUNT (ROBOT_LEG_NUM * MOTORS_PER_LEG)
 #define M8010_EXTRA_MOTOR13_LEG_IDX (ROBOT_LEG_NUM - 1U)
 #define M8010_EXTRA_MOTOR13_ID 13U
 #define M8010_EXTRA_MOTOR13_SIGN (-1)
@@ -162,7 +163,7 @@ void extract_data(MotorData_t *motor_r)
 	}
 }
 
-MotorCmd_t cmd[12];
+MotorCmd_t cmd[M8010_MAIN_MOTOR_COUNT];
 MotorData_t recv;
 
 /*
@@ -185,6 +186,26 @@ static volatile uint8_t g_motor_dma_expected_id[ROBOT_LEG_NUM] = {0};
 static volatile uint8_t g_motor_dma_rx_done[ROBOT_LEG_NUM] = {0};
 /* 本轮回包是否匹配目标电机且校验通过。 */
 static volatile uint8_t g_motor_dma_rx_match[ROBOT_LEG_NUM] = {0};
+
+static void MotorCmd_SetDefaults(MotorCmd_t *motor_s,
+								 unsigned short id,
+								 float kp,
+								 float kw)
+{
+	if (motor_s == NULL)
+	{
+		return;
+	}
+
+	motor_s->id = id;
+	motor_s->mode = 1U;
+	motor_s->T = 0.0f;
+	motor_s->W = 0.0f;
+	motor_s->Pos = 0.0f;
+	motor_s->K_P = kp;
+	motor_s->K_W = kw;
+	modify_data(motor_s);
+}
 
 static void MotorBus_AbortStaleReceive(uint8_t leg_idx)
 {
@@ -213,14 +234,7 @@ static void MotorBus_AbortStaleReceive(uint8_t leg_idx)
 /* 初始化新增 ID13 电机的默认发送参数。 */
 static void motor13_init_cmd(void)
 {
-	g_motor13_cmd.id = M8010_EXTRA_MOTOR13_ID;
-	g_motor13_cmd.mode = 1U;
-	g_motor13_cmd.T = 0.0f;
-	g_motor13_cmd.W = 0.0f;
-	g_motor13_cmd.Pos = 0.0f;
-	g_motor13_cmd.K_P = 0.0f;
-	g_motor13_cmd.K_W = 0.02f;
-	modify_data(&g_motor13_cmd);
+	MotorCmd_SetDefaults(&g_motor13_cmd, M8010_EXTRA_MOTOR13_ID, 0.0f, 0.02f);
 
 	g_motor13.motor_s.id = M8010_EXTRA_MOTOR13_ID;
 	g_motor13.sign = M8010_EXTRA_MOTOR13_SIGN;
@@ -322,95 +336,48 @@ void MotorBus_Process(uint8_t leg_idx, uint16_t size)
 
 void cmd_init(void)
 {
-	for (int i = 0; i < 12; i++)
+	for (uint8_t i = 0U; i < M8010_MAIN_MOTOR_COUNT; i++)
 	{
-		cmd[i].id = i + 1;
-		cmd[i].mode = 1;
-		cmd[i].T = 0.0f;
-		cmd[i].W = 0.0f;
-		cmd[i].Pos = 0.0f;
-		cmd[i].K_P = 0.0f;
-		cmd[i].K_W = 0.0f;
-		modify_data(&cmd[i]);
+		MotorCmd_SetDefaults(&cmd[i], (unsigned short)(i + 1U), 0.0f, 0.0f);
 	}
 	motor13_init_cmd();
 }
 void cmd_init_2(void)
 {
-	for (int i = 0; i < 12; i++)
+	for (uint8_t i = 0U; i < M8010_MAIN_MOTOR_COUNT; i++)
 	{
-		cmd[i].id = i + 1;
-		cmd[i].mode = 1;
-		cmd[i].T = 0.0f;
-		cmd[i].W = 0.0f;
-		cmd[i].Pos = 0.0f;
-		cmd[i].K_P = 5.0f;
-		cmd[i].K_W = 0.03f;
-		modify_data(&cmd[i]);
+		MotorCmd_SetDefaults(&cmd[i], (unsigned short)(i + 1U), 5.0f, 0.03f);
 	}
 	motor13_init_cmd();
 }
 void cmd_single_test_init(void)
 {
-	for (int i = 0; i < 12; i++)
+	static const uint8_t hip_cmd_indices[ROBOT_LEG_NUM] = {0U, 3U, 6U, 9U};
+	uint8_t i;
+
+	for (i = 0U; i < M8010_MAIN_MOTOR_COUNT; i++)
 	{
-		cmd[i].id = i + 1;
-		cmd[i].mode = 1;
-		cmd[i].T = 0.0f;
-		cmd[i].W = 0.0f;
-		cmd[i].Pos = 0.0f;
-		cmd[i].K_P = 2.0f;
-		cmd[i].K_W = 0.02f;
-		modify_data(&cmd[i]);
+		MotorCmd_SetDefaults(&cmd[i], (unsigned short)(i + 1U), 2.0f, 0.02f);
 	}
-	for (int i = 6; i < 12; i++)
+	for (i = 6U; i < M8010_MAIN_MOTOR_COUNT; i++)
 	{
-		cmd[i].id = i + 1;
-		cmd[i].mode = 1;
-		cmd[i].T = 0.0f;
-		cmd[i].W = 0.0f;
-		cmd[i].Pos = 0.0f;
-		cmd[i].K_P = 3.5f;
-		cmd[i].K_W = 0.02f;
-		modify_data(&cmd[i]);
+		MotorCmd_SetDefaults(&cmd[i], (unsigned short)(i + 1U), 3.5f, 0.02f);
 	}
-	cmd[0].id = 1;
-	cmd[0].mode = 1;
-	cmd[0].T = 0.0f;
-	cmd[0].W = 0.0f;
-	cmd[0].Pos = 0.0f;
-	cmd[0].K_P = 2.2f;
-	cmd[0].K_W = 0.02f;
-	modify_data(&cmd[0]);
-	cmd[3].id = 4;
-	cmd[3].mode = 1;
-	cmd[3].T = 0.0f;
-	cmd[3].W = 0.0f;
-	cmd[3].Pos = 0.0f;
-	cmd[3].K_P = 2.2f;
-	cmd[3].K_W = 0.02f;
-	modify_data(&cmd[3]);
-	cmd[6].id = 7;
-	cmd[6].mode = 1;
-	cmd[6].T = 0.0f;
-	cmd[6].W = 0.0f;
-	cmd[6].Pos = 0.0f;
-	cmd[6].K_P = 2.2f;
-	cmd[6].K_W = 0.02f;
-	modify_data(&cmd[6]);
-	cmd[9].id = 10;
-	cmd[9].mode = 1;
-	cmd[9].T = 0.0f;
-	cmd[9].W = 0.0f;
-	cmd[9].Pos = 0.0f;
-	cmd[9].K_P = 2.2f;
-	cmd[9].K_W = 0.02f;
-	modify_data(&cmd[9]);
+	for (i = 0U; i < ROBOT_LEG_NUM; i++)
+	{
+		uint8_t cmd_idx = hip_cmd_indices[i];
+		MotorCmd_SetDefaults(&cmd[cmd_idx], (unsigned short)(cmd_idx + 1U), 2.2f, 0.02f);
+	}
 	motor13_init_cmd();
 }
 
 void set_cmd_pos_by_index(uint8_t cmd_idx, float pos)
 {
+	if (cmd_idx >= M8010_MAIN_MOTOR_COUNT)
+	{
+		return;
+	}
+
 	/* 写入该电机本次要发送的位置目标。 */
 	cmd[cmd_idx].Pos = pos;
 	/* 位置更新后立刻重打包，确保发送字节流同步更新。 */
@@ -419,7 +386,7 @@ void set_cmd_pos_by_index(uint8_t cmd_idx, float pos)
 
 void set_cmd_by_index(uint8_t cmd_idx, const MotorCmd_t *motor_s)
 {
-	if ((cmd_idx >= (ROBOT_LEG_NUM * MOTORS_PER_LEG)) ||
+	if ((cmd_idx >= M8010_MAIN_MOTOR_COUNT) ||
 		(motor_s == NULL))
 	{
 		return;
@@ -440,104 +407,79 @@ void set_cmd_by_index(uint8_t cmd_idx, const MotorCmd_t *motor_s)
 	modify_data(&cmd[cmd_idx]);
 }
 
+static void MotorBus_SendCommandAndWait(uint8_t leg_idx,
+										const MotorCmd_t *motor_s,
+										M8010 *feedback_motor,
+										Leg *leg)
+{
+	uint32_t start_tick;
+
+	if ((leg == NULL) || (motor_s == NULL) || (feedback_motor == NULL) ||
+		(leg_idx >= ROBOT_LEG_NUM))
+	{
+		return;
+	}
+
+	MotorBus_AbortStaleReceive(leg_idx);
+
+	g_motor_dma_expected_id[leg_idx] = (uint8_t)motor_s->id;
+	g_motor_dma_rx_done[leg_idx] = 0U;
+	g_motor_dma_rx_match[leg_idx] = 0U;
+
+	HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_SET);
+	if (HAL_UART_Transmit_DMA(leg[leg_idx].huart,
+							  (uint8_t *)&motor_s->motor_send_data,
+							  sizeof(RIS_ControlData_t)) != HAL_OK)
+	{
+		HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
+		feedback_motor->motor_r.timeout++;
+		return;
+	}
+
+	start_tick = HAL_GetTick();
+	while (g_motor_dma_rx_done[leg_idx] == 0U)
+	{
+		if ((HAL_GetTick() - start_tick) >= M8010_DMA_WAIT_TIMEOUT_MS)
+		{
+			(void)HAL_UART_AbortTransmit(leg[leg_idx].huart);
+			(void)HAL_UART_AbortReceive(leg[leg_idx].huart);
+			HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
+			feedback_motor->motor_r.timeout++;
+			break;
+		}
+	}
+
+	if ((g_motor_dma_rx_done[leg_idx] != 0U) &&
+		(g_motor_dma_rx_match[leg_idx] == 0U))
+	{
+		feedback_motor->motor_r.timeout++;
+	}
+}
+
 void send_data_all(Leg *leg)
 {
-	for (int leg_idx = 0; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+	if (leg == NULL)
 	{
-		for (int motor_idx = 0; motor_idx < MOTORS_PER_LEG; motor_idx++)
+		return;
+	}
+
+	for (uint8_t leg_idx = 0U; leg_idx < ROBOT_LEG_NUM; leg_idx++)
+	{
+		for (uint8_t motor_idx = 0U; motor_idx < MOTORS_PER_LEG; motor_idx++)
 		{
-			int cmd_idx = leg_idx * MOTORS_PER_LEG + motor_idx;
+			uint8_t cmd_idx = (uint8_t)(leg_idx * MOTORS_PER_LEG + motor_idx);
 			M8010 *motor = &leg[leg_idx].motors_peer_leg[motor_idx];
-			uint32_t start_tick;
 
-			MotorBus_AbortStaleReceive((uint8_t)leg_idx);
-
-			/* 为本轮发送准备回包匹配状态。 */
-			g_motor_dma_expected_id[leg_idx] = (uint8_t)cmd[cmd_idx].id;
-			g_motor_dma_rx_done[leg_idx] = 0U;
-			g_motor_dma_rx_match[leg_idx] = 0U;
-
-			HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_SET);
-			if (HAL_UART_Transmit_DMA(leg[leg_idx].huart,
-							  (uint8_t *)&cmd[cmd_idx].motor_send_data,
-							  sizeof(RIS_ControlData_t)) != HAL_OK)
-			{
-				HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
-				motor->motor_r.timeout++;
-				continue;
-			}
-
-			/*
-			 * 等待本轮回包：
-			 * - TxCplt 回调里会启动 HAL_UART_Receive_DMA；
-			 * - RxCplt 回调里会调用 MotorBus_Process 置位 rx_done。
-			 */
-			start_tick = HAL_GetTick();
-			while (g_motor_dma_rx_done[leg_idx] == 0U)
-			{
-				if ((HAL_GetTick() - start_tick) >= M8010_DMA_WAIT_TIMEOUT_MS)
-				{
-					(void)HAL_UART_AbortTransmit(leg[leg_idx].huart);
-					(void)HAL_UART_AbortReceive(leg[leg_idx].huart);
-					HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
-					motor->motor_r.timeout++;
-					break;
-				}
-			}
-
-			if ((g_motor_dma_rx_done[leg_idx] != 0U) &&
-				(g_motor_dma_rx_match[leg_idx] == 0U))
-			{
-				motor->motor_r.timeout++;
-			}
+			MotorBus_SendCommandAndWait(leg_idx, &cmd[cmd_idx], motor, leg);
 		}
 
-		/*
-		 * 在 4 号腿同一路 485 再发送新增的 ID13：
-		 * 角度/Kp 直接取外部全局变量，便于应用层实时覆盖。
-		 */
-		if ((uint8_t)leg_idx == M8010_EXTRA_MOTOR13_LEG_IDX)
+		if (leg_idx == M8010_EXTRA_MOTOR13_LEG_IDX)
 		{
-			uint32_t start_tick;
-
-			MotorBus_AbortStaleReceive((uint8_t)leg_idx);
-
 			g_motor13_cmd.Pos = g_motor13_target_angle;
 			g_motor13_cmd.K_P = g_motor13_target_kp;
 			modify_data(&g_motor13_cmd);
 
-			g_motor_dma_expected_id[leg_idx] = (uint8_t)g_motor13_cmd.id;
-			g_motor_dma_rx_done[leg_idx] = 0U;
-			g_motor_dma_rx_match[leg_idx] = 0U;
-
-			HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_SET);
-			if (HAL_UART_Transmit_DMA(leg[leg_idx].huart,
-						  (uint8_t *)&g_motor13_cmd.motor_send_data,
-						  sizeof(RIS_ControlData_t)) != HAL_OK)
-			{
-				HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
-				g_motor13.motor_r.timeout++;
-				continue;
-			}
-
-			start_tick = HAL_GetTick();
-			while (g_motor_dma_rx_done[leg_idx] == 0U)
-			{
-				if ((HAL_GetTick() - start_tick) >= M8010_DMA_WAIT_TIMEOUT_MS)
-				{
-					(void)HAL_UART_AbortTransmit(leg[leg_idx].huart);
-					(void)HAL_UART_AbortReceive(leg[leg_idx].huart);
-					HAL_GPIO_WritePin(leg[leg_idx].dir_port, leg[leg_idx].dir_pin, GPIO_PIN_RESET);
-					g_motor13.motor_r.timeout++;
-					break;
-				}
-			}
-
-			if ((g_motor_dma_rx_done[leg_idx] != 0U) &&
-				(g_motor_dma_rx_match[leg_idx] == 0U))
-			{
-				g_motor13.motor_r.timeout++;
-			}
+			MotorBus_SendCommandAndWait(leg_idx, &g_motor13_cmd, &g_motor13, leg);
 		}
 	}
 }

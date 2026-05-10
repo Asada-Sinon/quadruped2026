@@ -1345,6 +1345,21 @@
               <FileType>1</FileType>
               <FilePath>..\user\Src\app_robot.c</FilePath>
             </File>
+            <File>
+              <FileName>app_motor_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\user\Src\app_motor_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_motion_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\user\Src\app_motion_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_diagnostics.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\user\Src\app_diagnostics.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

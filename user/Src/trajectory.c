@@ -1,4 +1,5 @@
 #include "trajectory.h"
+#include "robot_math.h"
 #include <math.h>
 
 #define TRAJ_MAX_STEP_LENGTH_M 0.100f
@@ -17,19 +18,6 @@
 #define TRAJ_DIAGONAL_PHASE_OFFSET 0.50f
 #define TRAJ_TWO_PI (2.0f * GAIT_PI)
 
-static float traj_clampf(float x, float min_val, float max_val)
-{
-    if (x < min_val)
-    {
-        return min_val;
-    }
-    if (x > max_val)
-    {
-        return max_val;
-    }
-    return x;
-}
-
 /* 对二维步幅做限幅：
  * 1) x/y 分量先各自限幅；
  * 2) 再限制平面向量模长不超过 TRAJ_MAX_STEP_LENGTH_M，
@@ -45,8 +33,8 @@ static void Trajectory_ClampPlanarStep(float *step_x_m, float *step_y_m)
         return;
     }
 
-    *step_x_m = traj_clampf(*step_x_m, -TRAJ_MAX_STEP_LENGTH_M, TRAJ_MAX_STEP_LENGTH_M);
-    *step_y_m = traj_clampf(*step_y_m, -TRAJ_MAX_STEP_LENGTH_M, TRAJ_MAX_STEP_LENGTH_M);
+    *step_x_m = Robot_ClampF(*step_x_m, -TRAJ_MAX_STEP_LENGTH_M, TRAJ_MAX_STEP_LENGTH_M);
+    *step_y_m = Robot_ClampF(*step_y_m, -TRAJ_MAX_STEP_LENGTH_M, TRAJ_MAX_STEP_LENGTH_M);
 
     mag = sqrtf((*step_x_m) * (*step_x_m) + (*step_y_m) * (*step_y_m));
     if (mag > TRAJ_MAX_STEP_LENGTH_M)
@@ -147,7 +135,7 @@ static void Trajectory_GetLegPhase(uint8_t leg_idx,
         *local_phase = (leg_phase - TRAJ_SWING_PHASE_RATIO) / TRAJ_STANCE_PHASE_RATIO;
     }
 
-    *local_phase = traj_clampf(*local_phase, 0.0f, 1.0f);
+    *local_phase = Robot_ClampF(*local_phase, 0.0f, 1.0f);
 }
 static GaitFootPosM Trajectory_GenerateNominalCenteredFoot(const GaitFootPosM *nominal,
                                                            StepLegState leg_state,
@@ -177,9 +165,9 @@ static GaitFootPosM Trajectory_GenerateNominalCenteredFoot(const GaitFootPosM *n
 
     /* 轨迹参数限幅，防止上层给过大值导致足端冲到极限位。 */
     Trajectory_ClampPlanarStep(&step_x_m, &step_y_m);
-    swing_height_m = traj_clampf(swing_height_m, 0.0f, TRAJ_MAX_SWING_HEIGHT_M);
+    swing_height_m = Robot_ClampF(swing_height_m, 0.0f, TRAJ_MAX_SWING_HEIGHT_M);
 
-    s = traj_clampf(local_phase, 0.0f, 1.0f);
+    s = Robot_ClampF(local_phase, 0.0f, 1.0f);
     prog = Trajectory_CycloidProgress(s);
     lift = Trajectory_CycloidLift(s);
     half_step_x = 0.5f * step_x_m;
@@ -365,9 +353,9 @@ void Trajectory_SetStepLength(DiagonalCycloidGait *gait, float step_length_m)
         return;
     }
 
-    gait->step_length_m = traj_clampf(step_length_m,
-                                      -TRAJ_MAX_STEP_LENGTH_M,
-                                      TRAJ_MAX_STEP_LENGTH_M);
+    gait->step_length_m = Robot_ClampF(step_length_m,
+                                       -TRAJ_MAX_STEP_LENGTH_M,
+                                       TRAJ_MAX_STEP_LENGTH_M);
 }
 
 void Trajectory_SetSwingHeight(DiagonalCycloidGait *gait, float swing_height_m)
@@ -382,9 +370,9 @@ void Trajectory_SetSwingHeight(DiagonalCycloidGait *gait, float swing_height_m)
         swing_height_m = 0.0f;
     }
 
-    gait->swing_height_m = traj_clampf(swing_height_m,
-                                       0.0f,
-                                       TRAJ_MAX_SWING_HEIGHT_M);
+    gait->swing_height_m = Robot_ClampF(swing_height_m,
+                                        0.0f,
+                                        TRAJ_MAX_SWING_HEIGHT_M);
 }
 
 void Trajectory_SetBodyVelocity(DiagonalCycloidGait *gait,
@@ -397,15 +385,15 @@ void Trajectory_SetBodyVelocity(DiagonalCycloidGait *gait,
         return;
     }
 
-    gait->body_vx_m_s = traj_clampf(body_vx_m_s,
-                                    -TRAJ_MAX_BODY_VX_M_S,
-                                    TRAJ_MAX_BODY_VX_M_S);
-    gait->body_vy_m_s = traj_clampf(body_vy_m_s,
-                                    -TRAJ_MAX_BODY_VY_M_S,
-                                    TRAJ_MAX_BODY_VY_M_S);
-    gait->body_w_rad_s = traj_clampf(body_w_rad_s,
-                                     -TRAJ_MAX_BODY_W_RAD_S,
-                                     TRAJ_MAX_BODY_W_RAD_S);
+    gait->body_vx_m_s = Robot_ClampF(body_vx_m_s,
+                                     -TRAJ_MAX_BODY_VX_M_S,
+                                     TRAJ_MAX_BODY_VX_M_S);
+    gait->body_vy_m_s = Robot_ClampF(body_vy_m_s,
+                                     -TRAJ_MAX_BODY_VY_M_S,
+                                     TRAJ_MAX_BODY_VY_M_S);
+    gait->body_w_rad_s = Robot_ClampF(body_w_rad_s,
+                                      -TRAJ_MAX_BODY_W_RAD_S,
+                                      TRAJ_MAX_BODY_W_RAD_S);
 }
 
 void Trajectory_SetFrontSwingHeightBias(DiagonalCycloidGait *gait, float front_bias_m)
@@ -421,7 +409,7 @@ void Trajectory_SetFrontSwingHeightBias(DiagonalCycloidGait *gait, float front_b
     }
 
     /* 该偏置只会在前腿(FL/FR)摆动相被叠加，支撑相与后腿不受影响。 */
-    gait->front_swing_height_bias_m = traj_clampf(front_bias_m,
+    gait->front_swing_height_bias_m = Robot_ClampF(front_bias_m,
                                                    0.0f,
                                                    TRAJ_MAX_FRONT_SWING_BIAS_M);
 }

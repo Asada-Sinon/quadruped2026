@@ -2,6 +2,7 @@
 
 #include "app_robot.h"
 #include "imu.h"
+#include "robot_math.h"
 #include "usart.h"
 #include <math.h>
 #include <string.h>
@@ -152,36 +153,6 @@ static RobotStatePacket g_tx_packet;
 static volatile uint8_t g_tx_busy = 0U;
 static uint32_t g_last_state_tx_tick_ms = 0U;
 
-/* 快速绝对值：仅处理 float，用于姿态安全判断。 */
-static float pccomm_absf(float x)
-{
-    return (x >= 0.0f) ? x : -x;
-}
-
-/* 浮点限幅：把输入限制在 [low, high] 区间。 */
-static float pccomm_clampf(float x, float low, float high)
-{
-    if (x < low)
-    {
-        return low;
-    }
-    if (x > high)
-    {
-        return high;
-    }
-    return x;
-}
-
-/*
- * 简易有限性检查：
- * - 拒绝 NaN/Inf；
- * - 拒绝过大的异常值，避免污染控制链路。
- */
-static uint8_t pccomm_isfinite_float(float x)
-{
-    return ((x == x) && (x <= 1000000.0f) && (x >= -1000000.0f)) ? 1U : 0U;
-}
-
 /* 解析出错时重置状态机，回到“等待帧头”。 */
 static void pccomm_reset_parser(void)
 {
@@ -237,7 +208,7 @@ static uint8_t pccomm_validate_command(const JointCommandPacket *pkt)
     for (i = 0U; i < (uint8_t)J_NUM; i++)
     {
         float q = pkt->q_des[i];
-        if (pccomm_isfinite_float(q) == 0U)
+        if (Robot_IsFiniteReasonableF(q) == 0U)
         {
             return 0U;
         }
@@ -354,8 +325,8 @@ static void pccomm_update_attitude_safety(void)
         pitch_deg = imu->angle[1];
     }
 
-    if ((pccomm_absf(roll_deg) > PC_COMM_ATTITUDE_LIMIT_DEG) ||
-        (pccomm_absf(pitch_deg) > PC_COMM_ATTITUDE_LIMIT_DEG))
+    if ((Robot_AbsF(roll_deg) > PC_COMM_ATTITUDE_LIMIT_DEG) ||
+        (Robot_AbsF(pitch_deg) > PC_COMM_ATTITUDE_LIMIT_DEG))
     {
         g_attitude_safe = 0U;
         if (g_estop == 0U)
@@ -383,7 +354,7 @@ static void pccomm_rate_limit_qdes(const float target[J_NUM])
 
     for (i = 0U; i < (uint8_t)J_NUM; i++)
     {
-        float clipped = pccomm_clampf(target[i], g_joint_limit_low[i], g_joint_limit_high[i]);
+        float clipped = Robot_ClampF(target[i], g_joint_limit_low[i], g_joint_limit_high[i]);
         float delta = clipped - g_q_des_filtered[i];
 
         if (delta > PC_COMM_MAX_DQ_PER_1MS)
@@ -475,11 +446,11 @@ static void pccomm_fill_state_packet(RobotStatePacket *pkt)
 
     for (i = 0U; i < (uint8_t)J_NUM; i++)
     {
-        if (pccomm_isfinite_float(pkt->joint_pos[i]) == 0U)
+        if (Robot_IsFiniteReasonableF(pkt->joint_pos[i]) == 0U)
         {
             pkt->joint_pos[i] = g_joint_default_stand_rad[i];
         }
-        if (pccomm_isfinite_float(pkt->joint_vel[i]) == 0U)
+        if (Robot_IsFiniteReasonableF(pkt->joint_vel[i]) == 0U)
         {
             pkt->joint_vel[i] = 0.0f;
         }

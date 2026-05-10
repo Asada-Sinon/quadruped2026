@@ -1,15 +1,14 @@
 #include "gait.h"
 #include "robot_map.h"
+#include "robot_math.h"
 #include <math.h>
 #include <string.h>
 //这正逆运动学里面的角度都是弧度，所有的角度都是关节角度，也就是输出侧的角度
-#define GAIT_NUMERIC_EPS 1.0e-6f
-#define GAIT_IK_DOMAIN_EPS 1.0e-4f
-#define PI 3.14159265358979323846f
 /* 4 条腿的足端目标缓存（髋关节局部坐标系，单位 m）。 */
 GaitFootPosM g_foot_target_m[ROBOT_LEG_NUM] = {0};
 /* 4 条腿当前足端位置缓存（髋关节局部坐标系，单位 m）。 */
 GaitFootPosM g_foot_current_m[ROBOT_LEG_NUM] = {0};
+
 //x狗头方向，y左，z上
 
 // 逆运动学，输入足端位置，输出关节角
@@ -33,13 +32,10 @@ void gait_inverse_kinematics_core(uint8_t leg_id, const float foot_pos[3], float
 	float L2 = sqrtf(px * px + py * py + pz * pz - l1 * l1);
 	// 应用余弦定理，确保参数在arccos的定义域[-1,1]内
 	float temp = (l2 * l2 + l3 * l3 - L2 * L2) / (2 * fabs(l2 * l3));
-	if (temp > 1)
-		temp = 1;
-	if (temp < -1)
-		temp = -1;
+	temp = Robot_ClampF(temp, -1.0f, 1.0f);
 	// 小腿关节角度 - 首先计算为[0,π]范围，然后转换到关节约束范围[-π,0]
 	float calf_angle = acosf(temp);	 //[0, PI]
-	calf_angle = -(PI - calf_angle); //[-PI, 0]
+	calf_angle = -(GAIT_PI - calf_angle); //[-PI, 0]
 
 	/*计算大腿关节角度*/
 	// 通过几何关系计算参数
@@ -127,6 +123,11 @@ void leg_forward_kinematics_vel(uint8_t leg_id, const float joint_pos[3], const 
 // 给单腿发送足端位置
 uint8_t Gait_SetLegFootTargetM(uint8_t leg_idx, float x_m, float y_m, float z_m)
 {
+	if (leg_idx >= ROBOT_LEG_NUM)
+	{
+		return 1U;
+	}
+
 	g_foot_target_m[leg_idx].x_m = x_m;
 	g_foot_target_m[leg_idx].y_m = y_m;
 	g_foot_target_m[leg_idx].z_m = z_m;
