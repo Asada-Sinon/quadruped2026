@@ -111,6 +111,9 @@ static float g_interp_duration_ms[APP_MOTOR_COUNT] = {0};
 static uint8_t g_interp_inited[APP_MOTOR_COUNT] = {0};
 /* 首次全回传后再启用非零 Kp/Kw。 */
 static uint8_t g_kpkw_armed = 0U;
+/* Policy takeover motor-side PD gains; tune these live from Keil Watch. */
+volatile float g_policy_motor_kp = 0.50f;
+volatile float g_policy_motor_kw = 0.01f;
 /* 诊断：当前有多少个电机已完成有效回传（PosZeroInited && correct）。 */
 volatile uint8_t g_debug_motor_feedback_ok_count = 0U;
 /*
@@ -780,6 +783,15 @@ void App_Robot_Loop1ms(void)
         /* PC 端给的是 URDF 顺序的一维关节角数组。 */
         float q_des_urdf[J_NUM];
         PCComm_GetQDesUrdf(q_des_urdf);
+        if (g_kpkw_armed != 0U)
+        {
+            App_SetMainMotorCommandDefaults(0.0f,
+                                            0.0f,
+                                            (float)g_policy_motor_kp,
+                                            (float)g_policy_motor_kw,
+                                            1U,
+                                            0U);
+        }
         /* 将一维关节角映射到 [腿][关节] 目标字段，再发布快照交给 motorsend 发送。 */
         App_Set_Model_Joint_Target_Angle(q_des_urdf);
         App_PublishMotorCommandSnapshot();
@@ -791,6 +803,7 @@ void App_Robot_Loop1ms(void)
     /* PC policy 刚退出时，强制回到 STAND，避免保持旧的轨迹状态。 */
     if (pc_policy_was_active != 0U)
     {
+        App_SetMainMotorCommandDefaults(0.0f, 0.0f, 3.15f, 0.06f, 1U, 0U);
         App_SetControlMode(ROBOT_MODE_STAND);
         pc_policy_was_active = 0U;
     }
@@ -846,19 +859,50 @@ void App_Robot_Send_Loop(void)
      * App_Robot_MotorSendLoop() 进入，避免 VOFA/其他任务误调用造成 send_data_all() 重入。
      */
 }
+#define APP_VOFA_DIAG_CH_COUNT 64U
+#define APP_VOFA_SEND_DIV      15U
+
+#if (VOFA_JF_MAX_CH < APP_VOFA_DIAG_CH_COUNT)
+#error "VOFA_JF_MAX_CH must be at least APP_VOFA_DIAG_CH_COUNT"
+#endif
+
 float ch[VOFA_JF_MAX_CH] = {0};
 void App_vofa_Send(void)
 {
-    float q_des[J_NUM];
+    static uint8_t s_vofa_div = 0U;
+    static float q[J_NUM];
+    static float q_des_filtered[J_NUM];
+    static float q_des_raw[J_NUM];
+    static float qd[J_NUM];
     uint8_t i;
 
-    PCComm_GetLatestQDesUrdf(q_des);
+    s_vofa_div++;
+    if (s_vofa_div < APP_VOFA_SEND_DIV)
+    {
+        return;
+    }
+    s_vofa_div = 0U;
+
+    App_Get_Model_Joint_Angles(q);
+    PCComm_GetQDesUrdf(q_des_filtered);
+    PCComm_GetLatestQDesUrdf(q_des_raw);
+    App_Get_Model_Joint_Velocities(qd);
+
     for (i = 0U; i < (uint8_t)J_NUM; i++)
     {
-        ch[i] = q_des[i];
+        ch[i] = q[i];
+        ch[12U + i] = q_des_filtered[i];
+        ch[24U + i] = q_des_raw[i];
+        ch[36U + i] = q_des_filtered[i] - q[i];
+        ch[48U + i] = qd[i];
     }
 
-    VOFA_JF_DMA_Send(&hvofa, ch, (uint16_t)J_NUM);
+    ch[60U] = (float)PCComm_GetEnable();
+    ch[61U] = (float)PCComm_IsPolicyControlAllowed();
+    ch[62U] = (float)g_kpkw_armed;
+    ch[63U] = (float)g_debug_motor_send_cost_ms;
+
+    VOFA_JF_DMA_Send(&hvofa, ch, (uint16_t)APP_VOFA_DIAG_CH_COUNT);
 }
 // 单电机平滑计算
 float App_motor_angle_calculate(float target_angle, float pos_rel)

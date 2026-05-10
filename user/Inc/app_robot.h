@@ -105,6 +105,8 @@ extern float Target_Angle[ROBOT_LEG_NUM][MOTORS_PER_LEG];
 extern volatile uint32_t g_debug_motor_send_cost_ms;
 extern volatile uint32_t g_debug_motor_send_loop_count;
 extern volatile uint32_t g_debug_motor_snapshot_publish_count;
+extern volatile float g_policy_motor_kp;
+extern volatile float g_policy_motor_kw;
 
 /* 当前相对角请直接读取 leg[x].motors_peer_leg[y].motor_r.PosRel（单位 rad）。 */
 
