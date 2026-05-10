@@ -129,6 +129,9 @@ void PCComm_OnUart10TxCplt(void);
 /* 急停接口：禁止 policy 接管并锁存故障。 */
 void PCComm_EStop(void);
 
+/* 调试用速度命令缓存，由 Keil Watch/上位机状态包共用。 */
+extern float volecity_cmd[3];
+
 #ifdef __cplusplus
 }
 #endif

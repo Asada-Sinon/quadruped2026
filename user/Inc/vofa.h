@@ -14,7 +14,7 @@ extern "C" {
  * 小端序
  */
 #ifndef VOFA_JF_MAX_CH
-#define VOFA_JF_MAX_CH  64U
+#define VOFA_JF_MAX_CH  76U
 #endif
 
 typedef struct
