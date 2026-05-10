@@ -186,6 +186,30 @@ static volatile uint8_t g_motor_dma_rx_done[ROBOT_LEG_NUM] = {0};
 /* 本轮回包是否匹配目标电机且校验通过。 */
 static volatile uint8_t g_motor_dma_rx_match[ROBOT_LEG_NUM] = {0};
 
+static void MotorBus_AbortStaleReceive(uint8_t leg_idx)
+{
+	UART_HandleTypeDef *huart;
+
+	if (leg_idx >= ROBOT_LEG_NUM)
+	{
+		return;
+	}
+
+	huart = legs[leg_idx].huart;
+	if (huart == NULL)
+	{
+		return;
+	}
+
+	/*
+	 * The M8010 bus is half duplex: one command produces one 16-byte reply.
+	 * Do not keep an old RX DMA alive across transactions. If the TxCplt
+	 * callback tries to start a fresh receive while the old one is active,
+	 * HAL_UART_Receive_DMA() returns HAL_BUSY and the real reply is skipped.
+	 */
+	(void)HAL_UART_AbortReceive(huart);
+}
+
 /* 初始化新增 ID13 电机的默认发送参数。 */
 static void motor13_init_cmd(void)
 {
@@ -426,6 +450,8 @@ void send_data_all(Leg *leg)
 			M8010 *motor = &leg[leg_idx].motors_peer_leg[motor_idx];
 			uint32_t start_tick;
 
+			MotorBus_AbortStaleReceive((uint8_t)leg_idx);
+
 			/* 为本轮发送准备回包匹配状态。 */
 			g_motor_dma_expected_id[leg_idx] = (uint8_t)cmd[cmd_idx].id;
 			g_motor_dma_rx_done[leg_idx] = 0U;
@@ -473,6 +499,8 @@ void send_data_all(Leg *leg)
 		if ((uint8_t)leg_idx == M8010_EXTRA_MOTOR13_LEG_IDX)
 		{
 			uint32_t start_tick;
+
+			MotorBus_AbortStaleReceive((uint8_t)leg_idx);
 
 			g_motor13_cmd.Pos = g_motor13_target_angle;
 			g_motor13_cmd.K_P = g_motor13_target_kp;
