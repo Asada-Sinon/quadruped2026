@@ -374,17 +374,16 @@ static void pccomm_clip_qdes(const float target[J_NUM])
     }
 }
 
-/* 根据 IMU 原始姿态计算机体坐标系下的重力投影向量。 */
+/* 根据机体姿态计算机体坐标系下的重力投影向量。 */
 static void pccomm_fill_projected_gravity(float projected_gravity[3])
 {
-    IMU *imu = imu_get_data();
+    IMU_Body *imu = imu_get_body_data();
     float roll_rad = 0.0f;
     float pitch_rad = 0.0f;
     float sr;
     float cr;
     float sp;
     float cp;
-    float gravity_imu[3];
 
     if (imu != 0)
     {
@@ -397,14 +396,9 @@ static void pccomm_fill_projected_gravity(float projected_gravity[3])
     sp = sinf(pitch_rad);
     cp = cosf(pitch_rad);
 
-    gravity_imu[0] = sp;
-    gravity_imu[1] = -sr * cp;
-    gravity_imu[2] = -cr * cp;
-
-    /* IMU X+ -> body Y-, IMU Y+ -> body X+, IMU Z+ -> body Z+. */
-    projected_gravity[0] = gravity_imu[1];
-    projected_gravity[1] = -gravity_imu[0];
-    projected_gravity[2] = gravity_imu[2];
+    projected_gravity[0] = sp;
+    projected_gravity[1] = -sr * cp;
+    projected_gravity[2] = -cr * cp;
 }
 
 /* 填充状态包内容并计算 CRC。 */
