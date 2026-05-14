@@ -19,7 +19,7 @@ extern "C" {
 #define PC_COMM_STATE_HEAD 0xFEFEU
 #define PC_COMM_COMMAND_HEAD 0xA5A5U
 #define PC_COMM_STATE_PERIOD_MS 20U
-#define PC_COMM_COMMAND_TIMEOUT_MS 100U
+#define PC_COMM_COMMAND_TIMEOUT_MS 300U
 
 #pragma pack(push, 1)
 /*

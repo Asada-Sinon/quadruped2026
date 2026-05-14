@@ -112,8 +112,8 @@ static uint8_t g_interp_inited[APP_MOTOR_COUNT] = {0};
 /* 首次全回传后再启用非零 Kp/Kw。 */
 static uint8_t g_kpkw_armed = 0U;
 /* Policy takeover motor-side PD gains; tune these live from Keil Watch. */
-volatile float g_policy_motor_kp = 0.50f;
-volatile float g_policy_motor_kw = 0.01f;
+volatile float g_policy_motor_kp = 1.20f;
+volatile float g_policy_motor_kw = 0.025f;
 /* 诊断：当前有多少个电机已完成有效回传（PosZeroInited && correct）。 */
 volatile uint8_t g_debug_motor_feedback_ok_count = 0U;
 /*
