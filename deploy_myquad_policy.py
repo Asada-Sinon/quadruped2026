@@ -38,52 +38,106 @@ except ModuleNotFoundError:
 POLICY_HZ = 50.0
 POLICY_DT = 1.0 / POLICY_HZ
 
-# 你的当前训练/Sim2Sim配置是 JointPositionActionCfg(scale=0.3, use_default_offset=True)
-# 仿真公式：q_des = q_default + 0.3 * action。
-TRAIN_ACTION_SCALE = 0.3
+# 当前训练/Sim2Sim配置是 JointPositionActionCfg(scale=0.2, use_default_offset=True)
+# 仿真公式：q_des = q_default + 0.2 * action。
+TRAIN_ACTION_SCALE = 0.2
 
 # 串口协议中的关节顺序。需要和 STM32 状态包/命令包完全一致。
 WIRE_JOINT_NAMES = [
-    "LF_HAA", "LF_HFE", "LF_KFE",
-    "RF_HAA", "RF_HFE", "RF_KFE",
-    "LH_HAA", "LH_HFE", "LH_KFE",
-    "RH_HAA", "RH_HFE", "RH_KFE",
+    "LF_HAA",
+    "LF_HFE",
+    "LF_KFE",
+    "RF_HAA",
+    "RF_HFE",
+    "RF_KFE",
+    "LH_HAA",
+    "LH_HFE",
+    "LH_KFE",
+    "RH_HAA",
+    "RH_HFE",
+    "RH_KFE",
 ]
 
 # IsaacLab policy 的 action/joint 顺序。这个顺序已在 Sim2Sim 中确认。
 POLICY_JOINT_NAMES = [
-    "LF_HAA", "LH_HAA", "RF_HAA", "RH_HAA",
-    "LF_HFE", "LH_HFE", "RF_HFE", "RH_HFE",
-    "LF_KFE", "LH_KFE", "RF_KFE", "RH_KFE",
+    "LF_HAA",
+    "LH_HAA",
+    "RF_HAA",
+    "RH_HAA",
+    "LF_HFE",
+    "LH_HFE",
+    "RF_HFE",
+    "RH_HFE",
+    "LF_KFE",
+    "LH_KFE",
+    "RF_KFE",
+    "RH_KFE",
 ]
 
-WIRE_TO_POLICY = np.array([WIRE_JOINT_NAMES.index(name) for name in POLICY_JOINT_NAMES], dtype=np.int64)
-POLICY_TO_WIRE = np.array([POLICY_JOINT_NAMES.index(name) for name in WIRE_JOINT_NAMES], dtype=np.int64)
+WIRE_TO_POLICY = np.array(
+    [WIRE_JOINT_NAMES.index(name) for name in POLICY_JOINT_NAMES], dtype=np.int64
+)
+POLICY_TO_WIRE = np.array(
+    [POLICY_JOINT_NAMES.index(name) for name in WIRE_JOINT_NAMES], dtype=np.int64
+)
 
 # 表 5 / my_quad.py 默认站姿角：URDF/模型关节角，单位 rad。
-Q_DEFAULT_WIRE = np.array([
-    -0.027960174616949163,  1.0191152035320088, -1.5190473144732646,
-     0.027960174616949163,  1.0191152035320088, -1.5190473144732646,
-    -0.027960174616949163,  1.0191152035320088, -1.5190473144732646,
-     0.027960174616949163,  1.0191152035320088, -1.5190473144732646,
-], dtype=np.float32)
+Q_DEFAULT_WIRE = np.array(
+    [
+        -0.027960174616949163,
+        1.0191152035320088,
+        -1.5190473144732646,
+        0.027960174616949163,
+        1.0191152035320088,
+        -1.5190473144732646,
+        -0.027960174616949163,
+        1.0191152035320088,
+        -1.5190473144732646,
+        0.027960174616949163,
+        1.0191152035320088,
+        -1.5190473144732646,
+    ],
+    dtype=np.float32,
+)
 Q_DEFAULT_POLICY = Q_DEFAULT_WIRE[WIRE_TO_POLICY]
 Q_DEFAULT = Q_DEFAULT_WIRE
 
 # 第一版保守关节限位。请后续替换为你 URDF 里的精确 lower/upper。
-Q_LOW_WIRE = np.array([
-    -0.785398163, -0.785398163, -2.333505210,
-    -1.570796327, -0.785398163, -2.333505210,
-    -0.785398163, -0.785398163, -2.333505210,
-    -1.570796327, -0.785398163, -2.333505210,
-], dtype=np.float32)
+Q_LOW_WIRE = np.array(
+    [
+        -0.785398163,
+        -0.785398163,
+        -2.333505210,
+        -1.570796327,
+        -0.785398163,
+        -2.333505210,
+        -0.785398163,
+        -0.785398163,
+        -2.333505210,
+        -1.570796327,
+        -0.785398163,
+        -2.333505210,
+    ],
+    dtype=np.float32,
+)
 
-Q_HIGH_WIRE = np.array([
-     1.570796327,  1.570796327, -0.483456203,
-     0.785398163,  1.570796327, -0.483456203,
-     1.570796327,  1.570796327, -0.483456203,
-     0.785398163,  1.570796327, -0.483456203,
-], dtype=np.float32)
+Q_HIGH_WIRE = np.array(
+    [
+        1.570796327,
+        1.570796327,
+        -0.483456203,
+        0.785398163,
+        1.570796327,
+        -0.483456203,
+        1.570796327,
+        1.570796327,
+        -0.483456203,
+        0.785398163,
+        1.570796327,
+        -0.483456203,
+    ],
+    dtype=np.float32,
+)
 Q_LOW_POLICY = Q_LOW_WIRE[WIRE_TO_POLICY]
 Q_HIGH_POLICY = Q_HIGH_WIRE[WIRE_TO_POLICY]
 
@@ -97,16 +151,16 @@ Q_HIGH_SOFT = Q_CENTER + Q_HALF_RANGE
 # 每个 policy 周期 q_des 最大变化量。
 DEFAULT_MAX_DQ_PER_STEP = 0.03
 
-CMD_LOW = np.array([-0.3, -0.15, -0.5], dtype=np.float32)
-CMD_HIGH = np.array([0.6, 0.15, 0.5], dtype=np.float32)
+CMD_LOW = np.array([-0.25, -0.10, -0.35], dtype=np.float32)
+CMD_HIGH = np.array([0.45, 0.10, 0.35], dtype=np.float32)
 MAX_ABS_JOINT_VEL = 40.0
 
-# 观测维度：
-# base_lin_vel(3), base_ang_vel(3), projected_gravity(3), command(3),
-# joint_pos_rel(12), joint_vel_rel(12), last_action(12), height_scan(187)
-HEIGHT_SCAN_DIM = 187
-HEIGHT_SCAN_VALUE = -0.13
-OBS_DIM = 3 + 3 + 3 + 3 + 12 + 12 + 12 + HEIGHT_SCAN_DIM
+# 观测维度和 IsaacLab ObservationGroupCfg(history_length=3) 保持一致。
+# 单帧项：base_ang_vel(3), projected_gravity(3), command(3), joint_pos_rel(12), joint_vel_rel(12), last_action(12)
+OBS_HISTORY_LENGTH = 3
+OBS_TERM_DIMS = (3, 3, 3, 12, 12, 12)
+BASE_OBS_DIM = sum(OBS_TERM_DIMS)
+OBS_DIM = BASE_OBS_DIM * OBS_HISTORY_LENGTH
 ACTION_DIM = 12
 MAX_ABS_ACTION = 8.0
 
@@ -169,11 +223,12 @@ class RobotState:
 # 3. CRC16-CCITT-FALSE
 # =========================
 
+
 def crc16_ccitt_false(data: bytes) -> int:
     """CRC-16/CCITT-FALSE: poly=0x1021, init=0xFFFF."""
     crc = 0xFFFF
     for b in data:
-        crc ^= (b << 8)
+        crc ^= b << 8
         for _ in range(8):
             if crc & 0x8000:
                 crc = ((crc << 1) ^ 0x1021) & 0xFFFF
@@ -185,6 +240,7 @@ def crc16_ccitt_false(data: bytes) -> int:
 # =========================
 # 4. 串口工具
 # =========================
+
 
 def list_serial_ports() -> None:
     if serial is None:
@@ -202,7 +258,9 @@ def list_serial_ports() -> None:
 
 def open_serial(port: str, baud: int, timeout: float = 0.02) -> serial.Serial:
     if serial is None:
-        raise RuntimeError("缺少 pyserial，live 模式无法打开串口。请先安装 `pip install pyserial`。")
+        raise RuntimeError(
+            "缺少 pyserial，live 模式无法打开串口。请先安装 `pip install pyserial`。"
+        )
     ser = serial.Serial(
         port=port,
         baudrate=baud,
@@ -223,9 +281,9 @@ def read_state_packet(ser: serial.Serial) -> Optional[RobotState]:
         b = ser.read(1)
         if not b:
             return None
-        if b == b"\xFE":
+        if b == b"\xfe":
             b2 = ser.read(1)
-            if b2 == b"\xFE":
+            if b2 == b"\xfe":
                 rest = ser.read(STATE_SIZE - 2)
                 if len(rest) != STATE_SIZE - 2:
                     return None
@@ -249,12 +307,18 @@ def read_state_packet(ser: serial.Serial) -> Optional[RobotState]:
     fault = values[3]
 
     idx = 4
-    base_lin_vel = np.array(values[idx:idx+3], dtype=np.float32); idx += 3
-    base_ang_vel = np.array(values[idx:idx+3], dtype=np.float32); idx += 3
-    projected_gravity = np.array(values[idx:idx+3], dtype=np.float32); idx += 3
-    cmd = np.array(values[idx:idx+3], dtype=np.float32); idx += 3
-    joint_pos = np.array(values[idx:idx+12], dtype=np.float32); idx += 12
-    joint_vel = np.array(values[idx:idx+12], dtype=np.float32); idx += 12
+    base_lin_vel = np.array(values[idx : idx + 3], dtype=np.float32)
+    idx += 3
+    base_ang_vel = np.array(values[idx : idx + 3], dtype=np.float32)
+    idx += 3
+    projected_gravity = np.array(values[idx : idx + 3], dtype=np.float32)
+    idx += 3
+    cmd = np.array(values[idx : idx + 3], dtype=np.float32)
+    idx += 3
+    joint_pos = np.array(values[idx : idx + 12], dtype=np.float32)
+    idx += 12
+    joint_vel = np.array(values[idx : idx + 12], dtype=np.float32)
+    idx += 12
     battery_v = float(values[idx])
 
     return RobotState(
@@ -271,7 +335,9 @@ def read_state_packet(ser: serial.Serial) -> Optional[RobotState]:
     )
 
 
-def pack_command_packet(q_des: np.ndarray, enable: int, mode: int, tick_ms: int) -> bytes:
+def pack_command_packet(
+    q_des: np.ndarray, enable: int, mode: int, tick_ms: int
+) -> bytes:
     q_des = np.asarray(q_des, dtype=np.float32).reshape(12)
     payload = CMD_STRUCT_NOCRC.pack(
         CMD_HEAD,
@@ -288,36 +354,88 @@ def pack_command_packet(q_des: np.ndarray, enable: int, mode: int, tick_ms: int)
 # 5. 策略推理与安全层
 # =========================
 
-def build_observation(state: RobotState, last_action: np.ndarray) -> np.ndarray:
-    """复现训练时 observation 拼接顺序。"""
+
+class ObservationHistory:
+    """Term-wise history buffer matching IsaacLab's flattened observation history."""
+
+    def __init__(self, history_length: int = OBS_HISTORY_LENGTH):
+        self.history_length = history_length
+        self._buffers: Optional[list[np.ndarray]] = None
+
+    def reset(self) -> None:
+        self._buffers = None
+
+    def append_and_flatten(self, terms: list[np.ndarray]) -> np.ndarray:
+        if len(terms) != len(OBS_TERM_DIMS):
+            raise RuntimeError(
+                f"obs term count mismatch: got {len(terms)}, expected {len(OBS_TERM_DIMS)}"
+            )
+
+        normalized_terms = []
+        for term, dim in zip(terms, OBS_TERM_DIMS):
+            term = np.asarray(term, dtype=np.float32).reshape(-1)
+            if term.shape[0] != dim:
+                raise RuntimeError(
+                    f"obs term dim mismatch: got {term.shape[0]}, expected {dim}"
+                )
+            normalized_terms.append(term)
+
+        if self._buffers is None:
+            self._buffers = [
+                np.repeat(term[None, :], self.history_length, axis=0)
+                for term in normalized_terms
+            ]
+        else:
+            for buffer, term in zip(self._buffers, normalized_terms):
+                buffer[:-1] = buffer[1:]
+                buffer[-1] = term
+
+        obs = np.concatenate([buffer.reshape(-1) for buffer in self._buffers]).astype(
+            np.float32
+        )
+        if obs.shape[0] != OBS_DIM:
+            raise RuntimeError(
+                f"obs dim mismatch: got {obs.shape[0]}, expected {OBS_DIM}"
+            )
+        return obs
+
+
+def build_observation_terms(
+    state: RobotState, last_action: np.ndarray
+) -> list[np.ndarray]:
+    """复现训练时单帧 observation term 顺序。"""
     joint_pos_policy = state.joint_pos.astype(np.float32)[WIRE_TO_POLICY]
     joint_vel_policy = state.joint_vel.astype(np.float32)[WIRE_TO_POLICY]
     joint_pos_rel = joint_pos_policy - Q_DEFAULT_POLICY
     joint_vel_rel = joint_vel_policy
     cmd = np.clip(state.cmd.astype(np.float32), CMD_LOW, CMD_HIGH)
-    height_scan = np.full(HEIGHT_SCAN_DIM, HEIGHT_SCAN_VALUE, dtype=np.float32)
 
-    obs = np.concatenate([
-        state.base_lin_vel.astype(np.float32),
+    return [
         state.base_ang_vel.astype(np.float32),
         state.projected_gravity.astype(np.float32),
         cmd,
         joint_pos_rel,
         joint_vel_rel,
         last_action.astype(np.float32),
-        height_scan,
-    ]).astype(np.float32)
+    ]
 
-    if obs.shape[0] != OBS_DIM:
-        raise RuntimeError(f"obs dim mismatch: got {obs.shape[0]}, expected {OBS_DIM}")
-    return obs
+
+def build_observation(
+    state: RobotState, last_action: np.ndarray, obs_history: ObservationHistory
+) -> np.ndarray:
+    """复现训练时带 history 的 observation 拼接顺序。"""
+    return obs_history.append_and_flatten(build_observation_terms(state, last_action))
 
 
 def sanitize_state(state: RobotState) -> bool:
     """基础状态检查。返回 False 表示不应继续使能。"""
     arrays = [
-        state.base_lin_vel, state.base_ang_vel, state.projected_gravity,
-        state.cmd, state.joint_pos, state.joint_vel,
+        state.base_lin_vel,
+        state.base_ang_vel,
+        state.projected_gravity,
+        state.cmd,
+        state.joint_pos,
+        state.joint_vel,
     ]
     for arr in arrays:
         if not np.all(np.isfinite(arr)):
@@ -339,7 +457,9 @@ def sanitize_state(state: RobotState) -> bool:
         return False
 
     joint_pos_policy = state.joint_pos.astype(np.float32)[WIRE_TO_POLICY]
-    if np.any(joint_pos_policy < Q_LOW_POLICY - 0.05) or np.any(joint_pos_policy > Q_HIGH_POLICY + 0.05):
+    if np.any(joint_pos_policy < Q_LOW_POLICY - 0.05) or np.any(
+        joint_pos_policy > Q_HIGH_POLICY + 0.05
+    ):
         print("[SAFE] 关节角超出硬限位附近")
         return False
 
@@ -364,7 +484,9 @@ def limit_joint_position(q: np.ndarray) -> np.ndarray:
     return np.clip(q, Q_LOW_SOFT, Q_HIGH_SOFT)
 
 
-def limit_joint_rate(q_des: np.ndarray, q_prev: np.ndarray, max_dq: float) -> np.ndarray:
+def limit_joint_rate(
+    q_des: np.ndarray, q_prev: np.ndarray, max_dq: float
+) -> np.ndarray:
     dq = np.clip(q_des - q_prev, -max_dq, max_dq)
     return q_prev + dq
 
@@ -382,6 +504,7 @@ def policy_to_wire_joints(q_policy: np.ndarray) -> np.ndarray:
 # =========================
 # 6. dry-run / 主循环
 # =========================
+
 
 def make_fake_state(cmd: Tuple[float, float, float]) -> RobotState:
     return RobotState(
@@ -410,27 +533,39 @@ def infer_action(policy, obs: np.ndarray, device: str) -> np.ndarray:
         act_t = policy(obs_t)
     action = act_t.squeeze(0).detach().cpu().numpy().astype(np.float32)
     if action.shape[0] != ACTION_DIM:
-        raise RuntimeError(f"action dim mismatch: got {action.shape[0]}, expected {ACTION_DIM}")
+        raise RuntimeError(
+            f"action dim mismatch: got {action.shape[0]}, expected {ACTION_DIM}"
+        )
     return action
 
 
-def run_dry(policy_path: str, device: str, action_scale_real: float, cmd: Tuple[float, float, float]) -> None:
+def run_dry(
+    policy_path: str,
+    device: str,
+    action_scale_real: float,
+    cmd: Tuple[float, float, float],
+) -> None:
     print("[DRY] 加载 policy:", policy_path)
     policy = load_policy(policy_path, device)
     last_action = np.zeros(12, dtype=np.float32)
+    obs_history = ObservationHistory()
     q_prev = Q_DEFAULT_POLICY.copy()
 
-    print(f"[DRY] 输入是假状态：水平站立、关节在默认站姿、height_scan={HEIGHT_SCAN_VALUE}")
+    print(
+        f"[DRY] 输入是假状态：水平站立、关节在默认站姿、obs_dim={OBS_DIM}, history={OBS_HISTORY_LENGTH}"
+    )
     for i in range(20):
         state = make_fake_state(cmd)
-        obs = build_observation(state, last_action)
+        obs = build_observation(state, last_action, obs_history)
         action = infer_action(policy, obs, device)
         q_des = action_to_q_des(action, action_scale_real)
         q_des = limit_joint_rate(q_des, q_prev, DEFAULT_MAX_DQ_PER_STEP)
         q_prev = q_des
         last_action = action.copy()
 
-        print(f"\n[DRY {i:02d}] action min/max=({action.min():+.3f}, {action.max():+.3f})")
+        print(
+            f"\n[DRY {i:02d}] action min/max=({action.min():+.3f}, {action.max():+.3f})"
+        )
         for name, q in zip(POLICY_JOINT_NAMES, q_des):
             print(f"  {name:6s}: {q:+.4f} rad")
         time.sleep(POLICY_DT)
@@ -443,11 +578,16 @@ def run_live(args) -> None:
     print(f"[LIVE] port={args.port}, baud={args.baud}")
     print(f"[LIVE] policy={args.policy}, device={args.device}")
     print(f"[LIVE] no_send={args.no_send}, enable={args.enable}, mode={args.mode}")
-    print(f"[LIVE] action_scale_real={args.action_scale}, max_dq_per_step={args.max_dq}")
-    print(f"[LIVE] height_scan_value={HEIGHT_SCAN_VALUE}")
+    print(
+        f"[LIVE] action_scale_real={args.action_scale}, max_dq_per_step={args.max_dq}"
+    )
+    print(
+        f"[LIVE] obs_dim={OBS_DIM}, base_obs_dim={BASE_OBS_DIM}, history={OBS_HISTORY_LENGTH}"
+    )
     print("[LIVE] Ctrl+C 退出。")
 
     last_action = np.zeros(12, dtype=np.float32)
+    obs_history = ObservationHistory()
     q_prev = Q_DEFAULT_POLICY.copy()
     q_prev_initialized = False
 
@@ -463,12 +603,16 @@ def run_live(args) -> None:
                 if time.monotonic() - last_state_time > args.state_timeout:
                     print("[SAFE] 状态包超时，发送 disable/stand")
                     pkt = pack_command_packet(
-                        Q_DEFAULT_WIRE, enable=0, mode=MODE_STAND, tick_ms=int(time.time() * 1000)
+                        Q_DEFAULT_WIRE,
+                        enable=0,
+                        mode=MODE_STAND,
+                        tick_ms=int(time.time() * 1000),
                     )
                     if not args.no_send:
                         ser.write(pkt)
                     last_state_time = time.monotonic()
                     q_prev_initialized = False
+                    obs_history.reset()
                 continue
 
             last_state_time = time.monotonic()
@@ -480,11 +624,17 @@ def run_live(args) -> None:
                 mode = MODE_STAND
                 action = np.zeros(12, dtype=np.float32)
                 q_prev_initialized = False
+                obs_history.reset()
             else:
                 if not q_prev_initialized:
-                    q_prev = np.clip(state.joint_pos.astype(np.float32)[WIRE_TO_POLICY], Q_LOW_POLICY, Q_HIGH_POLICY)
+                    q_prev = np.clip(
+                        state.joint_pos.astype(np.float32)[WIRE_TO_POLICY],
+                        Q_LOW_POLICY,
+                        Q_HIGH_POLICY,
+                    )
+                    obs_history.reset()
                     q_prev_initialized = True
-                obs = build_observation(state, last_action)
+                obs = build_observation(state, last_action, obs_history)
                 action = infer_action(policy, obs, args.device)
                 if sanitize_action(action):
                     q_des = action_to_q_des(action, args.action_scale)
@@ -497,12 +647,15 @@ def run_live(args) -> None:
                     mode = MODE_STAND
                     action = np.zeros(12, dtype=np.float32)
                     q_prev_initialized = False
+                    obs_history.reset()
 
             q_prev = q_policy.copy()
             last_action = action.copy()
             q_send = policy_to_wire_joints(q_policy)
 
-            pkt = pack_command_packet(q_send, enable=enable, mode=mode, tick_ms=int(time.time() * 1000))
+            pkt = pack_command_packet(
+                q_send, enable=enable, mode=mode, tick_ms=int(time.time() * 1000)
+            )
             if not args.no_send:
                 ser.write(pkt)
 
@@ -520,11 +673,20 @@ def run_live(args) -> None:
                     f"q=({q_send.min():+.2f},{q_send.max():+.2f}) | "
                     f"bat={state.battery_v:.1f}V"
                 )
-                print("action =", np.array2string(last_action, precision=3, suppress_small=True))
-                print("q_policy =", np.array2string(q_policy, precision=3, suppress_small=True))
-                print("q_send_wire =", np.array2string(q_send, precision=3, suppress_small=True))
+                print(
+                    "action =",
+                    np.array2string(last_action, precision=3, suppress_small=True),
+                )
+                print(
+                    "q_policy =",
+                    np.array2string(q_policy, precision=3, suppress_small=True),
+                )
+                print(
+                    "q_send_wire =",
+                    np.array2string(q_send, precision=3, suppress_small=True),
+                )
                 print("state.cmd =", state.cmd)
-                print("base_lin_vel =", state.base_lin_vel)
+                print("base_ang_vel =", state.base_ang_vel)
                 print("projected_gravity =", state.projected_gravity)
 
             dt = time.monotonic() - t0
@@ -541,7 +703,7 @@ def run_live(args) -> None:
                 Q_DEFAULT_WIRE,
                 enable=0,
                 mode=MODE_STAND,
-                tick_ms=int(time.time() * 1000)
+                tick_ms=int(time.time() * 1000),
             )
             try:
                 ser.write(pkt)
@@ -550,27 +712,73 @@ def run_live(args) -> None:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Deploy MyQuad Isaac Lab policy to STM32 over serial.")
+    parser = argparse.ArgumentParser(
+        description="Deploy MyQuad Isaac Lab policy to STM32 over serial."
+    )
 
-    parser.add_argument("--list-ports", action="store_true", help="列出当前可用串口后退出")
-    parser.add_argument("--policy", type=str, default="policy.pt", help="Isaac Lab 导出的 exported/policy.pt 路径")
-    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"], help="PyTorch 推理设备")
+    parser.add_argument(
+        "--list-ports", action="store_true", help="列出当前可用串口后退出"
+    )
+    parser.add_argument(
+        "--policy",
+        type=str,
+        default="policy.pt",
+        help="Isaac Lab 导出的 exported/policy.pt 路径",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        choices=["cpu", "cuda"],
+        help="PyTorch 推理设备",
+    )
 
-    parser.add_argument("--port", type=str, default=None, help="串口名，例如 COM6 或 /dev/ttyUSB0")
-    parser.add_argument("--baud", type=int, default=921600, help="串口波特率，需和 STM32 一致")
+    parser.add_argument(
+        "--port", type=str, default=None, help="串口名，例如 COM6 或 /dev/ttyUSB0"
+    )
+    parser.add_argument(
+        "--baud", type=int, default=921600, help="串口波特率，需和 STM32 一致"
+    )
 
-    parser.add_argument("--dry-run", action="store_true", help="不连接串口，用假状态测试 policy 推理")
-    parser.add_argument("--no-send", action="store_true", help="连接串口并读取状态，但不向 STM32 下发命令")
-    parser.add_argument("--enable", action="store_true", help="真的使能下发。首次测试不要加这个参数")
-    parser.add_argument("--mode", type=int, default=MODE_WALK, help="下发给 STM32 的 mode，默认 WALK=2")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="不连接串口，用假状态测试 policy 推理"
+    )
+    parser.add_argument(
+        "--no-send",
+        action="store_true",
+        help="连接串口并读取状态，但不向 STM32 下发命令",
+    )
+    parser.add_argument(
+        "--enable", action="store_true", help="真的使能下发。首次测试不要加这个参数"
+    )
+    parser.add_argument(
+        "--mode", type=int, default=MODE_WALK, help="下发给 STM32 的 mode，默认 WALK=2"
+    )
 
-    parser.add_argument("--action-scale", type=float, default=0.15, help="真机 action scale，首次建议 0.10~0.15；确认安全后再升到 0.3")
-    parser.add_argument("--max-dq", type=float, default=DEFAULT_MAX_DQ_PER_STEP, help="每个 20ms 周期 q_des 最大变化，rad")
-    parser.add_argument("--state-timeout", type=float, default=0.10, help="多久没收到状态包就发送 disable，秒")
+    parser.add_argument(
+        "--action-scale",
+        type=float,
+        default=TRAIN_ACTION_SCALE,
+        help="真机 action scale；默认和训练一致，首次低速测试可临时降到 0.12",
+    )
+    parser.add_argument(
+        "--max-dq",
+        type=float,
+        default=DEFAULT_MAX_DQ_PER_STEP,
+        help="每个 20ms 周期 q_des 最大变化，rad",
+    )
+    parser.add_argument(
+        "--state-timeout",
+        type=float,
+        default=0.10,
+        help="多久没收到状态包就发送 disable，秒",
+    )
 
     parser.add_argument("--cmd-vx", type=float, default=0.0, help="dry-run 假命令 vx")
     parser.add_argument("--cmd-vy", type=float, default=0.0, help="dry-run 假命令 vy")
-    parser.add_argument("--cmd-yaw", type=float, default=0.0, help="dry-run 假命令 yaw_rate")
+    parser.add_argument(
+        "--cmd-yaw", type=float, default=0.0, help="dry-run 假命令 yaw_rate"
+    )
 
     return parser.parse_args()
 
@@ -592,7 +800,9 @@ def main() -> int:
         return 0
 
     if args.port is None:
-        print("错误：live 模式必须指定 --port。先运行：python deploy_myquad_policy.py --list-ports")
+        print(
+            "错误：live 模式必须指定 --port。先运行：python deploy_myquad_policy.py --list-ports"
+        )
         return 2
 
     run_live(args)

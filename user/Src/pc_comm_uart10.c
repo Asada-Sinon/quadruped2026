@@ -18,9 +18,7 @@
 #define PC_COMM_RX_WAIT_HEAD2 1U
 #define PC_COMM_RX_READ_FRAME 2U
 
-/* 关节目标滤波与安全阈值参数。 */
-#define PC_COMM_MAX_DQ_PER_1MS 0.0015f
-#define PC_COMM_LPF_ALPHA 0.03f  /* 一阶低通 α，fc≈4.8Hz @1ms，对 ±0.05rad 噪声衰减约 10x */
+/* 关节目标安全阈值参数。 */
 #define PC_COMM_ATTITUDE_LIMIT_DEG 30.0f
 #define PC_COMM_DEG_TO_RAD 0.01745329251994329577f
 #define PC_COMM_FAULT_NONE 0U
@@ -57,18 +55,18 @@ typedef struct
 
 /* 关节角安全下限（URDF 顺序，单位 rad）。 */
 static const float g_joint_limit_low[J_NUM] = {
-    -1.2f, -1.2f, -2.3f,
-    -1.2f, -1.2f, -2.3f,
-    -1.2f, -1.2f, -2.3f,
-    -1.2f, -1.2f, -2.3f,
+    -0.785398163f, -0.785398163f, -2.333505210f,
+    -1.570796327f, -0.785398163f, -2.333505210f,
+    -0.785398163f, -0.785398163f, -2.333505210f,
+    -1.570796327f, -0.785398163f, -2.333505210f,
 };
 
 /* 关节角安全上限（URDF 顺序，单位 rad）。 */
 static const float g_joint_limit_high[J_NUM] = {
-    1.2f, 1.5f, -0.5f,
-    1.2f, 1.5f, -0.5f,
-    1.2f, 1.5f, -0.5f,
-    1.2f, 1.5f, -0.5f,
+    1.570796327f, 1.570796327f, -0.483456203f,
+    0.785398163f, 1.570796327f, -0.483456203f,
+    1.570796327f, 1.570796327f, -0.483456203f,
+    0.785398163f, 1.570796327f, -0.483456203f,
 };
 
 /*
@@ -112,32 +110,25 @@ volatile uint32_t g_debug_pc_cmd_accept_count = 0U;
 volatile uint32_t g_debug_pc_cmd_take_count = 0U;
 
 /*
- * PC q_des 滤波调试计数：PCComm_Task1ms() 当前确实处于 policy allowed
- * 路径，并使用 PC 下发的自然对齐 q_des[] 做限速滤波的次数。
+ * PC q_des 接管调试计数：PCComm_Task1ms() 当前确实处于 policy allowed
+ * 路径，并使用 PC 下发的自然对齐 q_des[] 做安全夹紧的次数。
  */
 volatile uint32_t g_debug_pc_allowed_rate_qdes_count = 0U;
 
 /*
- * 默认站姿滤波调试计数：PCComm_Task1ms() 当前未允许 policy 接管，
- * 因而使用 g_joint_default_stand_rad[] 做限速滤波的次数。
+ * 默认站姿目标调试计数：PCComm_Task1ms() 当前未允许 policy 接管，
+ * 因而使用 g_joint_default_stand_rad[] 做安全夹紧的次数。
  */
 volatile uint32_t g_debug_pc_stand_rate_qdes_count = 0U;
 
 /*
  * 目标关节与安全状态：
- * g_q_des_filtered: 经过限速滤波后的目标关节角；
+ * g_q_des_filtered: 经过安全夹紧后的目标关节角；
  * g_estop: 急停锁存标志；
  * g_attitude_safe: 姿态是否安全（roll/pitch 未超限）；
  * g_fault_code: 当前故障码（急停/姿态超限等）。
  */
-float g_q_des_filtered[J_NUM];//过了滤波的电脑发送关节角
-/*
- * 一阶低通滤波器状态（PC policy 下发目标的内层平滑）。
- * g_q_des_lpf_state[j]: 对 g_latest_command.q_des[j] 做 IIR 滤波后的记忆值；
- * g_q_des_lpf_inited: 首次收到指令时直接装载，避免从零值长斜坡。
- */
-static float g_q_des_lpf_state[J_NUM];
-static uint8_t g_q_des_lpf_inited = 0U;
+float g_q_des_filtered[J_NUM];//PC 下发并经过安全夹紧的关节角
 static uint8_t g_estop = 0U;
 static uint8_t g_attitude_safe = 1U;
 static uint8_t g_fault_code = PC_COMM_FAULT_NONE;
@@ -148,7 +139,7 @@ static uint8_t g_fault_code = PC_COMM_FAULT_NONE;
  * g_tx_busy: DMA 发送中标志，防止重入；
  * g_last_state_tx_tick_ms: 上次发送的时间戳。
  */
-static RobotStatePacket g_tx_packet;
+RobotStatePacket g_tx_packet;
 static volatile uint8_t g_tx_busy = 0U;
 static uint32_t g_last_state_tx_tick_ms = 0U;
 
@@ -321,7 +312,7 @@ static void pccomm_take_pending_command(void)
     }
     /*
      * g_pending_command 已经是自然对齐的运行时结构体，这里可以整体复制。
-     * 临界区只保护 pending -> local 的短复制，不做限速滤波、CRC 或其它
+     * 临界区只保护 pending -> local 的短复制，不做目标处理、CRC 或其它
      * 耗时操作，避免扩大关中断时间。
      */
     cmd_local = g_pending_command;
@@ -372,43 +363,28 @@ static void pccomm_update_attitude_safety(void)
     }
 }
 
-/*
- * 关节目标限速：
- * 先做关节角限幅，再限制每 1ms 的最大变化量，
- * 以此平滑 PC 下发的目标轨迹。
- */
-static void pccomm_rate_limit_qdes(const float target[J_NUM])
+/* 关节目标硬限幅：PC 已做 50Hz 限速，这里只负责最终安全夹紧。 */
+static void pccomm_clip_qdes(const float target[J_NUM])
 {
     uint8_t i;
 
     for (i = 0U; i < (uint8_t)J_NUM; i++)
     {
-        float clipped = pccomm_clampf(target[i], g_joint_limit_low[i], g_joint_limit_high[i]);
-        float delta = clipped - g_q_des_filtered[i];
-
-        if (delta > PC_COMM_MAX_DQ_PER_1MS)
-        {
-            delta = PC_COMM_MAX_DQ_PER_1MS;
-        }
-        else if (delta < -PC_COMM_MAX_DQ_PER_1MS)
-        {
-            delta = -PC_COMM_MAX_DQ_PER_1MS;
-        }
-
-        g_q_des_filtered[i] += delta;
+        g_q_des_filtered[i] = pccomm_clampf(target[i], g_joint_limit_low[i], g_joint_limit_high[i]);
     }
 }
 
-/* 根据 roll/pitch 计算机体坐标系下的重力投影向量。 */
+/* 根据 IMU 原始姿态计算机体坐标系下的重力投影向量。 */
 static void pccomm_fill_projected_gravity(float projected_gravity[3])
 {
-    IMU_Body *imu = imu_get_body_data();
+    IMU *imu = imu_get_data();
     float roll_rad = 0.0f;
     float pitch_rad = 0.0f;
     float sr;
     float cr;
     float sp;
     float cp;
+    float gravity_imu[3];
 
     if (imu != 0)
     {
@@ -421,9 +397,14 @@ static void pccomm_fill_projected_gravity(float projected_gravity[3])
     sp = sinf(pitch_rad);
     cp = cosf(pitch_rad);
 
-    projected_gravity[0] = sp;
-    projected_gravity[1] = -sr * cp;
-    projected_gravity[2] = -cr * cp;
+    gravity_imu[0] = sp;
+    gravity_imu[1] = -sr * cp;
+    gravity_imu[2] = -cr * cp;
+
+    /* IMU X+ -> body Y-, IMU Y+ -> body X+, IMU Z+ -> body Z+. */
+    projected_gravity[0] = gravity_imu[1];
+    projected_gravity[1] = -gravity_imu[0];
+    projected_gravity[2] = gravity_imu[2];
 }
 
 /* 填充状态包内容并计算 CRC。 */
@@ -521,7 +502,7 @@ uint16_t PCComm_CRC16_CCITT_FALSE(const uint8_t *data, uint16_t len)
     return crc;
 }
 
-/* 初始化通信模块状态：清零指令、滤波、时间戳与安全标志。 */
+/* 初始化通信模块状态：清零指令、目标、时间戳与安全标志。 */
 void PCComm_Init(void)
 {
     uint8_t i;
@@ -538,7 +519,7 @@ void PCComm_Init(void)
      * 关键安全设计：
      * - g_latest_command.q_des / g_pending_command.q_des 保持 memset 的零值，
      *   不预填默认站姿。这样在 Keil Watch 窗口可以直观确认"尚未收到 PC 指令"。
-     * - g_q_des_filtered 仍初始化为默认站姿，保证未接管时关节滤波目标安全。
+     * - g_q_des_filtered 仍初始化为默认站姿，保证未接管时关节目标安全。
      * - g_command_ever_received 清零：只有 ISR 收到 CRC 校验通过的帧后才置 1，
      *   杜绝上电/断连后误入 policy 接管。
      */
@@ -554,7 +535,6 @@ void PCComm_Init(void)
         g_latest_command.q_des[i] = g_joint_default_stand_rad[i];
         g_pending_command.q_des[i] = g_joint_default_stand_rad[i];
         g_q_des_filtered[i] = g_joint_default_stand_rad[i];
-        g_q_des_lpf_state[i] = g_joint_default_stand_rad[i];
     }
 
     g_pending_ready = 0U;
@@ -566,7 +546,6 @@ void PCComm_Init(void)
     g_attitude_safe = 1U;
     g_fault_code = PC_COMM_FAULT_NONE;
     g_command_ever_received = 0U;
-    g_q_des_lpf_inited = 0U;
     g_debug_pc_cmd_accept_count = 0U;
     g_debug_pc_cmd_take_count = 0U;
     g_debug_pc_allowed_rate_qdes_count = 0U;
@@ -579,7 +558,7 @@ void PCComm_StartReceive(void)
     (void)HAL_UART_Receive_IT(&huart10, &g_rx_byte, 1U);
 }
 
-/* 1ms 周期入口：更新 pending 指令、姿态安全与目标滤波。 */
+/* 1ms 周期入口：更新 pending 指令、姿态安全与目标夹紧。 */
 void PCComm_Task1ms(void)
 {
     pccomm_take_pending_command();
@@ -596,38 +575,13 @@ void PCComm_Task1ms(void)
 
     if (PCComm_IsPolicyControlAllowed() != 0U)
     {
-        /*
-         * 一阶低通滤波：对 PC 下发的 q_des 做 IIR 平滑，
-         * 衰减 ±0.05rad 高频噪声（约 10x），避免电机高频抖动。
-         * enable=1 时会进入这里。传入的是自然对齐的
-         * PCCommRuntimeCommand.q_des，不再是 packed JointCommandPacket.q_des。
-         */
-        uint8_t k;
-        if (g_q_des_lpf_inited == 0U)
-        {
-            for (k = 0U; k < (uint8_t)J_NUM; k++)
-            {
-                g_q_des_lpf_state[k] = g_latest_command.q_des[k];
-            }
-            g_q_des_lpf_inited = 1U;
-        }
-        else
-        {
-            const float alpha = PC_COMM_LPF_ALPHA;
-            const float one_minus_alpha = 1.0f - alpha;
-            for (k = 0U; k < (uint8_t)J_NUM; k++)
-            {
-                g_q_des_lpf_state[k] = alpha * g_latest_command.q_des[k]
-                                       + one_minus_alpha * g_q_des_lpf_state[k];
-            }
-        }
         g_debug_pc_allowed_rate_qdes_count++;
-        pccomm_rate_limit_qdes(g_q_des_lpf_state);
+        pccomm_clip_qdes(g_latest_command.q_des);
     }
     else
     {
         g_debug_pc_stand_rate_qdes_count++;
-        pccomm_rate_limit_qdes(g_joint_default_stand_rad);
+        pccomm_clip_qdes(g_joint_default_stand_rad);
     }
 }
 
@@ -757,7 +711,7 @@ uint8_t PCComm_IsPolicyControlAllowed(void)
     return 1U;
 }
 
-/* 复制滤波后的目标关节角到输出数组（URDF 顺序）。 */
+/* 复制安全夹紧后的目标关节角到输出数组（URDF 顺序）。 */
 void PCComm_GetQDesUrdf(float q_des_out[J_NUM])
 {
     uint8_t i;
