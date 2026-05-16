@@ -859,7 +859,7 @@ void App_Robot_Send_Loop(void)
      * App_Robot_MotorSendLoop() 进入，避免 VOFA/其他任务误调用造成 send_data_all() 重入。
      */
 }
-#define APP_VOFA_DIAG_CH_COUNT 76U
+#define APP_VOFA_DIAG_CH_COUNT 85U
 #define APP_VOFA_SEND_DIV      20U
 
 #if (VOFA_JF_MAX_CH < APP_VOFA_DIAG_CH_COUNT)
@@ -875,6 +875,13 @@ void App_vofa_Send(void)
     static float q_des_raw[J_NUM];
     static float qd[J_NUM];
     uint32_t command_age_ms;
+    IMU_Body *imu;
+    float roll_rad;
+    float pitch_rad;
+    float sr;
+    float cr;
+    float sp;
+    float cp;
     uint8_t i;
 
     s_vofa_div++;
@@ -915,6 +922,34 @@ void App_vofa_Send(void)
     ch[73U] = volecity_cmd[1];
     ch[74U] = volecity_cmd[2];
     ch[75U] = (float)g_debug_motor_send_loop_count;
+
+    imu = imu_get_body_data();
+    if (imu != 0)
+    {
+        ch[76U] = imu->gyro[0] * 0.01745329251994329577f;
+        ch[77U] = imu->gyro[1] * 0.01745329251994329577f;
+        ch[78U] = imu->gyro[2] * 0.01745329251994329577f;
+        ch[79U] = imu->angle[0];
+        ch[80U] = imu->angle[1];
+        ch[81U] = imu->angle[2];
+
+        roll_rad = imu->angle[0] * 0.01745329251994329577f;
+        pitch_rad = imu->angle[1] * 0.01745329251994329577f;
+        sr = sinf(roll_rad);
+        cr = cosf(roll_rad);
+        sp = sinf(pitch_rad);
+        cp = cosf(pitch_rad);
+        ch[82U] = sp;
+        ch[83U] = -sr * cp;
+        ch[84U] = -cr * cp;
+    }
+    else
+    {
+        for (i = 76U; i < APP_VOFA_DIAG_CH_COUNT; i++)
+        {
+            ch[i] = 0.0f;
+        }
+    }
 
     VOFA_JF_DMA_Send(&hvofa, ch, (uint16_t)APP_VOFA_DIAG_CH_COUNT);
 }
